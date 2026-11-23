@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Menu,
   Plus,
@@ -14,10 +14,13 @@ import {
   ChevronRight,
   Folder,
   Search,
+  FileCode2,
+  Box,
 } from 'lucide-react';
 import type {
   AttributesState,
   ConsoleLogEntry,
+  HmiLayer,
   RightBottomTab,
 } from '../types/studio';
 
@@ -28,9 +31,41 @@ interface RightInspectorDockProps {
   onChangeBottomTab: (tab: RightBottomTab) => void;
   codeDocument: string;
   onChangeCodeDocument: (code: string) => void;
+  onResetCodeDocument: () => void;
+  onExportHtml: () => void;
+  onClearConsoleLogs: () => void;
+  onDuplicateSelected: () => void;
+  onDeleteSelected: () => void;
+  onInsertAssetLayer: (kind: HmiLayer['kind'], label: string) => void;
   logs: ConsoleLogEntry[];
   isEditingLayer: boolean;
 }
+
+const ASSET_FOLDER_FILES: Record<
+  string,
+  Array<{ name: string; kind: HmiLayer['kind']; label: string }>
+> = {
+  'Program Files': [
+    { name: 'Speedo_Widget.hmi', kind: 'rectangle', label: 'Speedo Panel' },
+    { name: 'Cluster_Frame.hmi', kind: 'frame', label: 'Cluster Frame' },
+  ],
+  Label: [
+    { name: 'Gear_Indicator.txt', kind: 'text', label: 'DRIVE MODE' },
+    { name: 'Alert_Badge.vec', kind: 'vector', label: 'Alert Marker' },
+  ],
+  Documents: [
+    { name: 'Needle_Curve.svg', kind: 'pen', label: 'Needle Path' },
+    { name: 'Battery_Bar.hmi', kind: 'rectangle', label: 'SOC Bar' },
+  ],
+  'HMI Project': [
+    { name: 'Nav_Overlay.hmi', kind: 'frame', label: 'Nav Container' },
+    { name: 'Media_Title.txt', kind: 'text', label: 'Now Playing' },
+  ],
+  'Local Disc': [
+    { name: 'EV_Status_Box.hmi', kind: 'rectangle', label: 'EV Status' },
+    { name: 'Range_Readout.txt', kind: 'text', label: '461 km' },
+  ],
+};
 
 export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
   attributes,
@@ -39,19 +74,66 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
   onChangeBottomTab,
   codeDocument,
   onChangeCodeDocument,
+  onResetCodeDocument,
+  onExportHtml,
+  onClearConsoleLogs,
+  onDuplicateSelected,
+  onDeleteSelected,
+  onInsertAssetLayer,
   logs,
   isEditingLayer,
 }) => {
   const [topTab, setTopTab] = useState<'Attributes Editor' | 'Material Editor'>('Attributes Editor');
   const [expandedFolder, setExpandedFolder] = useState(true);
+  const [selectedFolder, setSelectedFolder] = useState<string>('Label');
+  const [assetSearchOpen, setAssetSearchOpen] = useState(false);
+  const [assetSearchQuery, setAssetSearchQuery] = useState('');
+  const [topMenuOpen, setTopMenuOpen] = useState(false);
+  const [bottomMenuOpen, setBottomMenuOpen] = useState(false);
+  const [textMenuOpen, setTextMenuOpen] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  const topMenuRef = useRef<HTMLDivElement>(null);
+  const bottomMenuRef = useRef<HTMLDivElement>(null);
+  const textMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (topMenuOpen && topMenuRef.current && !topMenuRef.current.contains(e.target as Node)) {
+        setTopMenuOpen(false);
+      }
+      if (
+        bottomMenuOpen &&
+        bottomMenuRef.current &&
+        !bottomMenuRef.current.contains(e.target as Node)
+      ) {
+        setBottomMenuOpen(false);
+      }
+      if (textMenuOpen && textMenuRef.current && !textMenuRef.current.contains(e.target as Node)) {
+        setTextMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [topMenuOpen, bottomMenuOpen, textMenuOpen]);
 
   const codeLines = codeDocument.split('\n');
+  const currentAssets = (ASSET_FOLDER_FILES[selectedFolder] || ASSET_FOLDER_FILES.Label).filter(
+    (item) =>
+      !assetSearchQuery || item.name.toLowerCase().includes(assetSearchQuery.toLowerCase())
+  );
+
+  const handleCopyCode = () => {
+    navigator.clipboard?.writeText(codeDocument).catch(() => {});
+    setCopiedCode(true);
+    setTimeout(() => setCopiedCode(false), 1500);
+  };
 
   return (
     <aside className="flex flex-col h-full bg-[#16181D] border-l border-[#232730] select-none overflow-hidden">
       {/* TOP HALF: Attributes Editor | Material Editor */}
       <div className="flex flex-col flex-1 min-h-0 border-b border-[#232730]">
-        <div className="h-[28px] px-2.5 bg-[#1A1D24] border-b border-[#232730] flex items-center justify-between shrink-0">
+        <div className="h-[28px] px-2.5 bg-[#1A1D24] border-b border-[#232730] flex items-center justify-between shrink-0 relative">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -76,7 +158,72 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
               Material Editor
             </button>
           </div>
-          <Menu className="w-3 h-3 text-[#6B7280]" />
+          <div ref={topMenuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setTopMenuOpen((o) => !o)}
+              className={`hover:text-white cursor-pointer ${
+                topMenuOpen ? 'text-[#24B0FF]' : 'text-[#6B7280]'
+              }`}
+              title="Inspector Actions"
+            >
+              <Menu className="w-3 h-3" />
+            </button>
+            {topMenuOpen && (
+              <div className="absolute right-0 top-full mt-1 w-48 bg-[#1C1F26] border border-[#2C313D] rounded-[3px] shadow-2xl py-1 z-50 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDuplicateSelected();
+                    setTopMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Duplicate Selected Layer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateAttributes({ x: 0, y: 0, angle: 0, opacity: 100 });
+                    setTopMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Reset Transform
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateAttributes({
+                      fillVisible: true,
+                      fillOpacity: 100,
+                      strokeVisible: true,
+                      strokeWidth: 1,
+                      tintVisible: false,
+                      shadowVisible: false,
+                      blurVisible: false,
+                      backgroundBlur: 0,
+                    });
+                    setTopMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Reset Styles & Effects
+                </button>
+                <div className="my-1 border-t border-[#262A34]" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDeleteSelected();
+                    setTopMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#EF4444] hover:bg-[#262B36] cursor-pointer"
+                >
+                  Delete Selected
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {topTab === 'Attributes Editor' ? (
@@ -195,6 +342,7 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                     <span>X</span>
                     <input
                       type="number"
+                      step={attributes.objectType === '3D Mesh' ? 0.1 : 1}
                       value={attributes.x}
                       onChange={(e) => onUpdateAttributes({ x: Number(e.target.value) || 0 })}
                       className="w-12 bg-transparent text-right text-[#D1D5DB] focus:outline-none focus:text-white"
@@ -204,26 +352,36 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                     <span>Y</span>
                     <input
                       type="number"
+                      step={attributes.objectType === '3D Mesh' ? 0.1 : 1}
                       value={attributes.y}
                       onChange={(e) => onUpdateAttributes({ y: Number(e.target.value) || 0 })}
                       className="w-10 bg-transparent text-right text-[#D1D5DB] focus:outline-none focus:text-white"
                     />
                   </label>
                   <label className="flex items-center justify-between text-[#8E95A2]">
-                    <span>W</span>
+                    <span>{attributes.objectType === '3D Mesh' ? 'Z' : 'W'}</span>
                     <input
                       type="number"
-                      value={attributes.w}
-                      onChange={(e) => onUpdateAttributes({ w: Number(e.target.value) || 1 })}
+                      step={attributes.objectType === '3D Mesh' ? 0.1 : 1}
+                      value={attributes.objectType === '3D Mesh' ? attributes.z : attributes.w}
+                      onChange={(e) =>
+                        attributes.objectType === '3D Mesh'
+                          ? onUpdateAttributes({ z: Number(e.target.value) || 0 })
+                          : onUpdateAttributes({ w: Number(e.target.value) || 1 })
+                      }
                       className="w-12 bg-transparent text-right text-[#D1D5DB] focus:outline-none focus:text-white"
                     />
                   </label>
                   <label className="flex items-center justify-between text-[#8E95A2]">
-                    <span>H</span>
+                    <span>{attributes.objectType === '3D Mesh' ? 'RY' : 'H'}</span>
                     <input
                       type="number"
-                      value={attributes.h}
-                      onChange={(e) => onUpdateAttributes({ h: Number(e.target.value) || 1 })}
+                      value={attributes.objectType === '3D Mesh' ? attributes.rotY : attributes.h}
+                      onChange={(e) =>
+                        attributes.objectType === '3D Mesh'
+                          ? onUpdateAttributes({ rotY: Number(e.target.value) || 0 })
+                          : onUpdateAttributes({ h: Number(e.target.value) || 1 })
+                      }
                       className="w-10 bg-transparent text-right text-[#D1D5DB] focus:outline-none focus:text-white"
                     />
                   </label>
@@ -375,11 +533,12 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                     type="button"
                     onClick={() => onUpdateAttributes({ fillVisible: !attributes.fillVisible })}
                     className="cursor-pointer hover:text-white"
+                    title="Toggle Fill Visibility"
                   >
                     {attributes.fillVisible ? (
                       <Eye className="w-3 h-3" />
                     ) : (
-                      <EyeOff className="w-3 h-3" />
+                      <EyeOff className="w-3 h-3 text-[#4B5563]" />
                     )}
                   </button>
                   <button
@@ -401,9 +560,13 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                 <button
                   type="button"
                   onClick={() =>
-                    onUpdateAttributes({ strokeWidth: Math.max(1, attributes.strokeWidth) })
+                    onUpdateAttributes({
+                      strokeVisible: true,
+                      strokeWidth: Math.max(1, attributes.strokeWidth),
+                    })
                   }
                   className="hover:text-white cursor-pointer"
+                  title="Enable Stroke"
                 >
                   <Plus className="w-3 h-3" />
                 </button>
@@ -420,13 +583,48 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                     {attributes.strokeColor.replace('#', '').toUpperCase()}
                   </span>
                 </div>
-                <span className="font-mono-code tabular-nums">{attributes.strokeOpacity}%</span>
-                <span className="text-[#9CA3AF]">{attributes.strokeBlend}</span>
+                <label className="flex items-center font-mono-code tabular-nums">
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={attributes.strokeOpacity}
+                    onChange={(e) =>
+                      onUpdateAttributes({
+                        strokeOpacity: Math.min(100, Math.max(0, Number(e.target.value) || 0)),
+                      })
+                    }
+                    className="w-8 bg-transparent text-right focus:outline-none"
+                  />
+                  <span className="text-[#6B7280]">%</span>
+                </label>
+                <select
+                  value={attributes.strokeBlend}
+                  onChange={(e) => onUpdateAttributes({ strokeBlend: e.target.value })}
+                  className="bg-transparent text-[#9CA3AF] focus:outline-none cursor-pointer text-[10px]"
+                >
+                  <option value="Normal" className="bg-[#1B1E25]">Normal</option>
+                  <option value="Multiply" className="bg-[#1B1E25]">Multiply</option>
+                  <option value="Screen" className="bg-[#1B1E25]">Screen</option>
+                </select>
                 <div className="flex items-center gap-1.5 text-[#8E95A2]">
-                  <Eye className="w-3 h-3" />
                   <button
                     type="button"
-                    onClick={() => onUpdateAttributes({ strokeWidth: 0 })}
+                    onClick={() =>
+                      onUpdateAttributes({ strokeVisible: !attributes.strokeVisible })
+                    }
+                    className="cursor-pointer hover:text-white"
+                    title="Toggle Stroke Visibility"
+                  >
+                    {attributes.strokeVisible ? (
+                      <Eye className="w-3 h-3" />
+                    ) : (
+                      <EyeOff className="w-3 h-3 text-[#4B5563]" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onUpdateAttributes({ strokeVisible: false, strokeWidth: 0 })}
                     className="cursor-pointer hover:text-white"
                     title="Clear Stroke"
                   >
@@ -459,6 +657,7 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                       onChange={(e) =>
                         onUpdateAttributes({
                           strokeWidth: Math.max(0, Number(e.target.value) || 0),
+                          strokeVisible: (Number(e.target.value) || 0) > 0,
                         })
                       }
                       className="w-8 bg-transparent focus:outline-none"
@@ -472,7 +671,21 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
             <div className="p-2.5 space-y-1.5">
               <div className="flex items-center justify-between text-[9.5px] uppercase tracking-wider text-[#6E7480]">
                 <span>EFFECTS</span>
-                <Plus className="w-3 h-3" />
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdateAttributes({
+                      tintVisible: true,
+                      shadowVisible: true,
+                      blurVisible: true,
+                      backgroundBlur: Math.max(20, attributes.backgroundBlur),
+                    })
+                  }
+                  className="hover:text-white cursor-pointer"
+                  title="Enable All Effects"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
               </div>
               <div className="flex items-center justify-between text-[#D1D5DB]">
                 <span className="text-[#9CA3AF]">Tint</span>
@@ -480,7 +693,9 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                   <input
                     type="color"
                     value={attributes.tintColor}
-                    onChange={(e) => onUpdateAttributes({ tintColor: e.target.value })}
+                    onChange={(e) =>
+                      onUpdateAttributes({ tintColor: e.target.value, tintVisible: true })
+                    }
                     className="w-3 h-3 rounded-full bg-transparent border-0 cursor-pointer p-0"
                   />
                   <span>{attributes.tintColor.replace('#', '').toUpperCase()}</span>
@@ -490,14 +705,22 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                     type="button"
                     onClick={() => onUpdateAttributes({ tintVisible: !attributes.tintVisible })}
                     className="cursor-pointer hover:text-white"
+                    title="Toggle Tint"
                   >
                     {attributes.tintVisible ? (
                       <Eye className="w-3 h-3" />
                     ) : (
-                      <EyeOff className="w-3 h-3" />
+                      <EyeOff className="w-3 h-3 text-[#4B5563]" />
                     )}
                   </button>
-                  <Minus className="w-3 h-3" />
+                  <button
+                    type="button"
+                    onClick={() => onUpdateAttributes({ tintVisible: false })}
+                    className="cursor-pointer hover:text-white"
+                    title="Disable Tint"
+                  >
+                    <Minus className="w-3 h-3" />
+                  </button>
                 </div>
               </div>
               <div className="flex items-center justify-between text-[#D1D5DB]">
@@ -506,7 +729,9 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                   <input
                     type="color"
                     value={attributes.shadowColor}
-                    onChange={(e) => onUpdateAttributes({ shadowColor: e.target.value })}
+                    onChange={(e) =>
+                      onUpdateAttributes({ shadowColor: e.target.value, shadowVisible: true })
+                    }
                     className="w-3 h-3 rounded-full bg-transparent border-0 cursor-pointer p-0"
                   />
                   <span>{attributes.shadowColor.replace('#', '').toUpperCase()}</span>
@@ -514,16 +739,26 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                 <div className="flex items-center gap-1.5 text-[#8E95A2]">
                   <button
                     type="button"
-                    onClick={() => onUpdateAttributes({ shadowVisible: !attributes.shadowVisible })}
+                    onClick={() =>
+                      onUpdateAttributes({ shadowVisible: !attributes.shadowVisible })
+                    }
                     className="cursor-pointer hover:text-white"
+                    title="Toggle Drop Shadow"
                   >
                     {attributes.shadowVisible ? (
                       <Eye className="w-3 h-3" />
                     ) : (
-                      <EyeOff className="w-3 h-3" />
+                      <EyeOff className="w-3 h-3 text-[#4B5563]" />
                     )}
                   </button>
-                  <Minus className="w-3 h-3" />
+                  <button
+                    type="button"
+                    onClick={() => onUpdateAttributes({ shadowVisible: false })}
+                    className="cursor-pointer hover:text-white"
+                    title="Disable Drop Shadow"
+                  >
+                    <Minus className="w-3 h-3" />
+                  </button>
                 </div>
               </div>
               <div className="flex items-center justify-between text-[#D1D5DB]">
@@ -536,6 +771,7 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                   onChange={(e) =>
                     onUpdateAttributes({
                       backgroundBlur: Math.max(0, Number(e.target.value) || 0),
+                      blurVisible: (Number(e.target.value) || 0) > 0,
                     })
                   }
                   className="w-10 bg-transparent text-right font-mono-code tabular-nums focus:outline-none"
@@ -545,26 +781,94 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                     type="button"
                     onClick={() => onUpdateAttributes({ blurVisible: !attributes.blurVisible })}
                     className="cursor-pointer hover:text-white"
+                    title="Toggle Background Blur"
                   >
                     {attributes.blurVisible ? (
                       <Eye className="w-3 h-3" />
                     ) : (
-                      <EyeOff className="w-3 h-3" />
+                      <EyeOff className="w-3 h-3 text-[#4B5563]" />
                     )}
                   </button>
-                  <Minus className="w-3 h-3" />
+                  <button
+                    type="button"
+                    onClick={() => onUpdateAttributes({ blurVisible: false, backgroundBlur: 0 })}
+                    className="cursor-pointer hover:text-white"
+                    title="Remove Background Blur"
+                  >
+                    <Minus className="w-3 h-3" />
+                  </button>
                 </div>
               </div>
             </div>
 
             {/* TEXT */}
-            <div className="p-2.5 space-y-2">
+            <div className="p-2.5 space-y-2 relative">
               <div className="flex items-center justify-between text-[9.5px] uppercase tracking-wider text-[#6E7480]">
                 <span>TEXT</span>
-                <MoreHorizontal className="w-3.5 h-3.5" />
+                <div ref={textMenuRef} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setTextMenuOpen((o) => !o)}
+                    className="hover:text-white cursor-pointer"
+                    title="Typography Presets"
+                  >
+                    <MoreHorizontal className="w-3.5 h-3.5" />
+                  </button>
+                  {textMenuOpen && (
+                    <div className="absolute right-0 top-full mt-1 w-44 bg-[#1C1F26] border border-[#2C313D] rounded-[3px] shadow-2xl py-1 z-50 text-[11px] normal-case tracking-normal">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onUpdateAttributes({
+                            fontFamily: 'Saira Semi Condensed',
+                            fontWeight: 'SemiBold',
+                            fontSize: 18,
+                            textTransform: 'uppercase',
+                          });
+                          setTextMenuOpen(false);
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                      >
+                        Preset: Cluster Readout
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onUpdateAttributes({
+                            fontFamily: 'JetBrains Mono',
+                            fontWeight: 'Regular',
+                            fontSize: 11,
+                            letterSpacing: 4,
+                          });
+                          setTextMenuOpen(false);
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                      >
+                        Preset: Telemetry Mono
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onUpdateAttributes({
+                            fontFamily: 'Saira Semi Condensed',
+                            fontWeight: 'Regular',
+                            fontSize: 11,
+                            lineHeight: 20,
+                            letterSpacing: 0,
+                            paragraphSpacing: 0,
+                          });
+                          setTextMenuOpen(false);
+                        }}
+                        className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                      >
+                        Reset Typography
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {isEditingLayer && (
+              {(isEditingLayer || attributes.selectedNodeId === 'minutes-label') && (
                 <input
                   type="text"
                   value={attributes.textContent}
@@ -629,8 +933,36 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                     className="w-7 bg-transparent focus:outline-none"
                   />
                 </label>
-                <span>|A| {attributes.letterSpacing}%</span>
-                <span>I {attributes.paragraphSpacing}%</span>
+                <label className="flex items-center gap-0.5" title="Letter Spacing %">
+                  <span className="text-[#6B7280]">|A|</span>
+                  <input
+                    type="number"
+                    min={-10}
+                    max={50}
+                    value={attributes.letterSpacing}
+                    onChange={(e) =>
+                      onUpdateAttributes({ letterSpacing: Number(e.target.value) || 0 })
+                    }
+                    className="w-6 bg-transparent text-right focus:outline-none"
+                  />
+                  <span className="text-[#6B7280]">%</span>
+                </label>
+                <label className="flex items-center gap-0.5" title="Paragraph Spacing %">
+                  <span className="text-[#6B7280]">I</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={50}
+                    value={attributes.paragraphSpacing}
+                    onChange={(e) =>
+                      onUpdateAttributes({
+                        paragraphSpacing: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                    className="w-6 bg-transparent text-right focus:outline-none"
+                  />
+                  <span className="text-[#6B7280]">%</span>
+                </label>
               </div>
               <div className="flex items-center justify-between text-[#8E95A2] pt-0.5">
                 <div className="flex items-center gap-2">
@@ -738,9 +1070,20 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
 
       {/* BOTTOM HALF: Asset manager | Code Editor | Console */}
       <div className="flex flex-col h-[215px] shrink-0">
-        <div className="h-[28px] px-2 bg-[#1A1D24] border-b border-[#232730] flex items-center justify-between shrink-0">
+        <div className="h-[28px] px-2 bg-[#1A1D24] border-b border-[#232730] flex items-center justify-between shrink-0 relative">
           <div className="flex items-center gap-2.5 overflow-x-auto">
-            {bottomTab === 'Asset manager' && <Search className="w-3 h-3 text-[#8E95A2] shrink-0" />}
+            {bottomTab === 'Asset manager' && (
+              <button
+                type="button"
+                onClick={() => setAssetSearchOpen((s) => !s)}
+                className={`hover:text-white cursor-pointer shrink-0 ${
+                  assetSearchOpen ? 'text-[#24B0FF]' : 'text-[#8E95A2]'
+                }`}
+                title="Search Assets"
+              >
+                <Search className="w-3 h-3" />
+              </button>
+            )}
             {(['Asset manager', 'Code Editor', 'Console'] as RightBottomTab[]).map((tab) => (
               <button
                 key={tab}
@@ -754,54 +1097,199 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
               </button>
             ))}
           </div>
-          <Menu className="w-3 h-3 text-[#6B7280] shrink-0" />
+          <div ref={bottomMenuRef} className="relative">
+            <button
+              type="button"
+              onClick={() => setBottomMenuOpen((o) => !o)}
+              className={`hover:text-white cursor-pointer shrink-0 ${
+                bottomMenuOpen ? 'text-[#24B0FF]' : 'text-[#6B7280]'
+              }`}
+              title="Asset / Code / Console Actions"
+            >
+              <Menu className="w-3 h-3" />
+            </button>
+            {bottomMenuOpen && (
+              <div className="absolute right-0 bottom-full mb-1 w-48 bg-[#1C1F26] border border-[#2C313D] rounded-[3px] shadow-2xl py-1 z-50 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleCopyCode();
+                    setBottomMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  {copiedCode ? 'Copied HTML!' : 'Copy HTML Code'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onExportHtml();
+                    setBottomMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Export HTML Bundle
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onResetCodeDocument();
+                    setBottomMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Reset HTML Boilerplate
+                </button>
+                <div className="my-1 border-t border-[#262A34]" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClearConsoleLogs();
+                    setBottomMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Clear Console Logs
+                </button>
+              </div>
+            )}
+          </div>
         </div>
+
+        {assetSearchOpen && bottomTab === 'Asset manager' && (
+          <div className="px-2 py-1 bg-[#13151A] border-b border-[#232730]">
+            <input
+              type="text"
+              value={assetSearchQuery}
+              onChange={(e) => setAssetSearchQuery(e.target.value)}
+              placeholder="Filter assets in folder..."
+              className="w-full bg-[#1C1F26] border border-[#2C313D] rounded-[2px] px-2 py-0.5 text-[10.5px] text-[#E5E7EB] placeholder-[#6B7280] focus:outline-none focus:border-[#24B0FF]"
+            />
+          </div>
+        )}
 
         {bottomTab === 'Asset manager' && (
           <div className="flex-1 flex min-h-0">
             <div className="w-[138px] border-r border-[#232730] py-1.5 px-1.5 text-[10.5px] space-y-1 overflow-y-auto studio-scroll">
-              <div className="flex items-center gap-1.5 text-[#9CA3AF]">
+              <button
+                type="button"
+                onClick={() => setSelectedFolder('Program Files')}
+                className={`w-full flex items-center gap-1.5 px-1 py-0.5 rounded-[2px] cursor-pointer ${
+                  selectedFolder === 'Program Files'
+                    ? 'bg-[#262B36] text-white'
+                    : 'text-[#9CA3AF] hover:text-white'
+                }`}
+              >
                 <ChevronRight className="w-3 h-3" />
                 <Folder className="w-3 h-3" />
                 <span className="truncate">Program Files</span>
-              </div>
-              <div className="flex items-center gap-1.5 bg-[#262B36] text-white px-1 py-0.5 rounded-[2px]">
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedFolder('Label')}
+                className={`w-full flex items-center gap-1.5 px-1 py-0.5 rounded-[2px] cursor-pointer ${
+                  selectedFolder === 'Label'
+                    ? 'bg-[#262B36] text-white'
+                    : 'text-[#9CA3AF] hover:text-white'
+                }`}
+              >
                 <ChevronRight className="w-3 h-3" />
                 <Folder className="w-3 h-3" />
                 <span className="truncate">Label</span>
-              </div>
+              </button>
               <div>
                 <button
                   type="button"
-                  onClick={() => setExpandedFolder(!expandedFolder)}
-                  className="flex items-center gap-1.5 text-[#9CA3AF] hover:text-white cursor-pointer"
+                  onClick={() => {
+                    setExpandedFolder(!expandedFolder);
+                    setSelectedFolder('Documents');
+                  }}
+                  className={`w-full flex items-center gap-1.5 px-1 py-0.5 rounded-[2px] cursor-pointer ${
+                    selectedFolder === 'Documents'
+                      ? 'bg-[#262B36] text-white'
+                      : 'text-[#9CA3AF] hover:text-white'
+                  }`}
                 >
-                  <ChevronDown className="w-3 h-3" />
+                  {expandedFolder ? (
+                    <ChevronDown className="w-3 h-3" />
+                  ) : (
+                    <ChevronRight className="w-3 h-3" />
+                  )}
                   <Folder className="w-3 h-3" />
                   <span>Documents</span>
                 </button>
                 {expandedFolder && (
                   <div className="pl-3.5 mt-1 space-y-1">
-                    <div className="flex items-center gap-1.5 text-[#D1D5DB]">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFolder('HMI Project')}
+                      className={`w-full flex items-center gap-1.5 px-1 py-0.5 rounded-[2px] cursor-pointer ${
+                        selectedFolder === 'HMI Project'
+                          ? 'bg-[#262B36] text-white'
+                          : 'text-[#D1D5DB] hover:text-white'
+                      }`}
+                    >
                       <ChevronDown className="w-3 h-3 text-[#6B7280]" />
                       <Folder className="w-3 h-3" />
                       <span className="truncate">HMI Project</span>
-                    </div>
-                    <div className="pl-4 flex items-center gap-1.5 text-[#9CA3AF]">
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedFolder('Label')}
+                      className="w-full pl-4 flex items-center gap-1.5 text-[#9CA3AF] hover:text-white cursor-pointer"
+                    >
                       <Folder className="w-3 h-3" />
                       <span>Label</span>
-                    </div>
+                    </button>
                   </div>
                 )}
               </div>
             </div>
 
-            <div className="flex-1 p-3 flex items-start gap-4 bg-[#14161B]">
-              {['Local Disc', 'Local Disc'].map((lbl, idx) => (
-                <div key={idx} className="flex flex-col items-center gap-1 text-center">
-                  <Folder className="w-7 h-7 text-[#9CA3AF] stroke-[1.3]" />
-                  <span className="text-[10px] text-[#9CA3AF] whitespace-nowrap">{lbl}</span>
-                </div>
+            <div className="flex-1 p-2.5 flex flex-wrap content-start gap-3 bg-[#14161B] overflow-y-auto studio-scroll">
+              {selectedFolder === 'Label' && !assetSearchQuery && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedFolder('Local Disc')}
+                    className="flex flex-col items-center gap-1 text-center cursor-pointer group"
+                    title="Open Local Disc assets"
+                  >
+                    <Folder className="w-7 h-7 text-[#9CA3AF] group-hover:text-[#24B0FF] stroke-[1.3]" />
+                    <span className="text-[10px] text-[#9CA3AF] group-hover:text-white whitespace-nowrap">
+                      Local Disc
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedFolder('Program Files')}
+                    className="flex flex-col items-center gap-1 text-center cursor-pointer group"
+                    title="Open Program Files assets"
+                  >
+                    <Folder className="w-7 h-7 text-[#9CA3AF] group-hover:text-[#24B0FF] stroke-[1.3]" />
+                    <span className="text-[10px] text-[#9CA3AF] group-hover:text-white whitespace-nowrap">
+                      Local Disc
+                    </span>
+                  </button>
+                </>
+              )}
+              {currentAssets.map((asset) => (
+                <button
+                  key={asset.name}
+                  type="button"
+                  onClick={() => onInsertAssetLayer(asset.kind, asset.label)}
+                  className="flex flex-col items-center gap-1 text-center max-w-[66px] cursor-pointer group"
+                  title={`Click to insert ${asset.name} onto HMI Canvas`}
+                >
+                  {asset.kind === 'text' ? (
+                    <FileCode2 className="w-6 h-6 text-[#60A5FA] group-hover:text-white stroke-[1.4]" />
+                  ) : (
+                    <Box className="w-6 h-6 text-[#10B981] group-hover:text-white stroke-[1.4]" />
+                  )}
+                  <span className="text-[9.5px] text-[#9CA3AF] group-hover:text-white truncate w-full">
+                    {asset.name}
+                  </span>
+                </button>
               ))}
             </div>
           </div>
@@ -825,20 +1313,24 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
 
         {bottomTab === 'Console' && (
           <div className="flex-1 p-2 bg-[#14161B] overflow-y-auto studio-scroll font-mono-code text-[10px] space-y-1.5">
-            {logs.map((log) => (
-              <div
-                key={log.id}
-                className={
-                  log.level === 'error'
-                    ? 'text-[#E05D56]'
-                    : log.level === 'ingest'
-                    ? 'text-[#24B0FF]'
-                    : 'text-[#39B97A]'
-                }
-              >
-                [{log.timestamp}] {log.message}
-              </div>
-            ))}
+            {logs.length === 0 ? (
+              <div className="text-[#6B7280]">Console buffer cleared.</div>
+            ) : (
+              logs.map((log) => (
+                <div
+                  key={log.id}
+                  className={
+                    log.level === 'error'
+                      ? 'text-[#E05D56]'
+                      : log.level === 'ingest'
+                      ? 'text-[#24B0FF]'
+                      : 'text-[#39B97A]'
+                  }
+                >
+                  [{log.timestamp}] {log.message}
+                </div>
+              ))
+            )}
           </div>
         )}
       </div>

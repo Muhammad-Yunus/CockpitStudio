@@ -24,10 +24,6 @@
   font-family: var(--font-mono);
 }
 
-.studio-backdrop {
-  background: radial-gradient(ellipse at 25% 18%, #3c4454 0%, #202530 48%, #13161d 100%);
-}
-
 .logic-grid-bg {
   background-color: #13151a;
   background-image:

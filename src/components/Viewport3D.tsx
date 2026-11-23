@@ -13,9 +13,11 @@ import {
   Hash,
   MapPin,
   Link2,
+  Trash2,
 } from 'lucide-react';
 import { PRIMITIVE_MENU_ITEMS } from '../data/defaultStudioState';
 import type {
+  AddedLight3D,
   AttributesState,
   CameraPreset3D,
   LightingPreset3D,
@@ -25,7 +27,9 @@ import type {
 
 interface Viewport3DProps {
   addedPrimitives: Array<{ id: string; kind: (typeof PRIMITIVE_MENU_ITEMS)[number] }>;
+  addedLights: AddedLight3D[];
   onAddPrimitive: (kind: (typeof PRIMITIVE_MENU_ITEMS)[number]) => void;
+  onDeleteSelectedPrimitive: (primitiveId: string) => void;
   attributes: AttributesState;
   onSelectMesh: (name: string, transform: MeshTransform3D) => void;
   onMeshTransformChange: (transform: MeshTransform3D) => void;
@@ -48,7 +52,9 @@ function detectSoftwareWebGL(): boolean {
 
 export const Viewport3D: React.FC<Viewport3DProps> = ({
   addedPrimitives,
+  addedLights,
   onAddPrimitive,
+  onDeleteSelectedPrimitive,
   attributes,
   onSelectMesh,
   onMeshTransformChange,
@@ -61,13 +67,16 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
   const [transformMode, setTransformMode] = useState<TransformMode3D>('translate');
   const [cameraPreset, setCameraPreset] = useState<CameraPreset3D>('perspective');
   const [lightingPreset, setLightingPreset] = useState<LightingPreset3D>('studio');
+  const [selectedPrimId, setSelectedPrimId] = useState<string | null>(null);
 
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const orbitRef = useRef<OrbitControls | null>(null);
   const transformRef = useRef<TransformControls | null>(null);
   const dynamicGroupRef = useRef<THREE.Group | null>(null);
+  const dynamicLightsGroupRef = useRef<THREE.Group | null>(null);
   const selectedMeshRef = useRef<THREE.Object3D | null>(null);
+  const isGizmoDraggingRef = useRef<boolean>(false);
   const redSurfaceMatRef = useRef<THREE.MeshPhysicalMaterial | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
   const axesRef = useRef<THREE.AxesHelper | null>(null);
@@ -235,6 +244,10 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     dynamicGroupRef.current = dynamicGroup;
     scene.add(dynamicGroup);
 
+    const dynamicLightsGroup = new THREE.Group();
+    dynamicLightsGroupRef.current = dynamicLightsGroup;
+    scene.add(dynamicLightsGroup);
+
     const extractTransform = (obj: THREE.Object3D): MeshTransform3D => ({
       name: obj.name || '3D Primitive',
       x: Math.round(obj.position.x * 100) / 100,
@@ -260,11 +273,13 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       if (hits.length > 0) {
         const hitObj = hits[0].object;
         selectedMeshRef.current = hitObj;
+        setSelectedPrimId((hitObj.userData?.primitiveId as string) || null);
         transformControls.attach(hitObj);
         onSelectMeshRef.current(hitObj.name || '3D Primitive', extractTransform(hitObj));
         requestRender();
       } else {
         selectedMeshRef.current = null;
+        setSelectedPrimId(null);
         transformControls.detach();
         requestRender();
       }
@@ -272,6 +287,7 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
 
     const onTransformDragging = (event: { value: unknown }) => {
+      isGizmoDraggingRef.current = Boolean(event.value);
       controls.enabled = !event.value;
     };
     const onTransformChange = () => {
@@ -438,7 +454,6 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       group.remove(child);
     }
 
-    let lastMesh: THREE.Mesh | null = null;
     addedPrimitives.forEach((item, index) => {
       let geo: THREE.BufferGeometry;
       switch (item.kind) {
@@ -474,18 +489,61 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
       });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.name = `${item.kind} ${index + 1}`;
+      mesh.userData = { primitiveId: item.id };
       const angle = index * 0.9;
       mesh.position.set(Math.cos(angle) * 1.9, 0.65, Math.sin(angle) * 1.6);
       group.add(mesh);
-      lastMesh = mesh;
     });
 
+    const lastMesh = group.children[group.children.length - 1] as THREE.Mesh | undefined;
     if (lastMesh && transformRef.current && transformMode !== 'off') {
       selectedMeshRef.current = lastMesh;
+      setSelectedPrimId((lastMesh.userData?.primitiveId as string) || null);
       transformRef.current.attach(lastMesh);
     }
     requestRenderRef.current();
   }, [addedPrimitives, transformMode]);
+
+  // Render dynamically added 3D lights
+  useEffect(() => {
+    const lightsGroup = dynamicLightsGroupRef.current;
+    if (!lightsGroup) return;
+    while (lightsGroup.children.length > 0) {
+      lightsGroup.remove(lightsGroup.children[0]);
+    }
+    addedLights.forEach((l, idx) => {
+      if (l.kind === 'Point Light') {
+        const pt = new THREE.PointLight(l.color, l.intensity * 2.5, 18);
+        pt.position.set(Math.sin(idx + 1) * 2.5, 2.4, Math.cos(idx + 1) * 2.5);
+        lightsGroup.add(pt);
+      } else if (l.kind === 'Rim Light') {
+        const rim = new THREE.DirectionalLight(l.color, l.intensity * 1.5);
+        rim.position.set(-4, 3 + idx * 0.6, -4);
+        lightsGroup.add(rim);
+      } else {
+        const dir = new THREE.DirectionalLight(l.color, l.intensity * 1.8);
+        dir.position.set(4, 6 + idx, 4);
+        lightsGroup.add(dir);
+      }
+    });
+    requestRenderRef.current();
+  }, [addedLights]);
+
+  // Sync manual Attributes Editor edits -> selected 3D Mesh
+  useEffect(() => {
+    if (isGizmoDraggingRef.current) return;
+    const mesh = selectedMeshRef.current;
+    if (!mesh || attributes.objectType !== '3D Mesh') return;
+    if (Math.abs(attributes.x) <= 50 && Math.abs(attributes.y) <= 50 && Math.abs(attributes.z) <= 50) {
+      mesh.position.set(attributes.x, attributes.y, attributes.z);
+    }
+    mesh.rotation.set(
+      THREE.MathUtils.degToRad(attributes.rotX),
+      THREE.MathUtils.degToRad(attributes.rotY),
+      THREE.MathUtils.degToRad(attributes.rotZ)
+    );
+    requestRenderRef.current();
+  }, [attributes.objectType, attributes.x, attributes.y, attributes.z, attributes.rotX, attributes.rotY, attributes.rotZ]);
 
   const cycleCameraPreset = () => {
     const order: CameraPreset3D[] = ['perspective', 'top', 'front', 'side'];
@@ -635,6 +693,25 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
         >
           <Link2 className="w-3.5 h-3.5" />
         </button>
+        {selectedPrimId && (
+          <>
+            <div className="w-[1px] h-4 bg-[#2C313D]" />
+            <button
+              type="button"
+              onClick={() => {
+                const targetId = selectedPrimId;
+                setSelectedPrimId(null);
+                selectedMeshRef.current = null;
+                transformRef.current?.detach();
+                onDeleteSelectedPrimitive(targetId);
+              }}
+              className="p-1 rounded-[2px] text-[#EF4444] hover:bg-[#2A2E39] cursor-pointer"
+              title="Delete Selected 3D Primitive"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

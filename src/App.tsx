@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Monitor, Layers, Cpu, X } from 'lucide-react';
+import { Monitor, Layers, Cpu, X, Plus } from 'lucide-react';
 import { TopStudioBar } from './components/TopStudioBar';
 import { LeftOutlinerDock } from './components/LeftOutlinerDock';
 import { ClusterHmiCanvas } from './components/ClusterHmiCanvas';
@@ -9,6 +9,8 @@ import { RightInspectorDock } from './components/RightInspectorDock';
 import { AuthAndIngestModal } from './components/AuthAndIngestModal';
 import {
   DEFAULT_ATTRIBUTES,
+  DEFAULT_CLUSTER_LOGIC_NODES,
+  DEFAULT_CLUSTER_LOGIC_WIRES,
   DEFAULT_CODE_DOCUMENT,
   DEFAULT_CONSOLE_LOGS,
   DEFAULT_EASING_CONFIG,
@@ -21,6 +23,7 @@ import {
   PRIMITIVE_MENU_ITEMS,
 } from './data/defaultStudioState';
 import type {
+  AddedLight3D,
   AttributesState,
   BottomPanelMode,
   BuiltInWidgetOverride,
@@ -28,6 +31,7 @@ import type {
   ConsoleLogEntry,
   EasingConfig,
   HmiLayer,
+  LightKind3D,
   LogicNode,
   LogicWire,
   MeshTransform3D,
@@ -50,9 +54,14 @@ function formatTimestamp(): string {
 }
 
 export default function App() {
-  const [isFramedWindow, setIsFramedWindow] = useState(true);
+  const [openViewportTabs, setOpenViewportTabs] = useState<ViewportTab[]>([
+    'Root',
+    'Cluster',
+    'Infotainment',
+  ]);
   const [activeViewportTab, setActiveViewportTab] = useState<ViewportTab>('Infotainment');
   const [bottomPanelMode, setBottomPanelMode] = useState<BottomPanelMode>('Logic Editor');
+  const [isBottomCollapsed, setIsBottomCollapsed] = useState(false);
   const [rightBottomTab, setRightBottomTab] = useState<RightBottomTab>('Asset manager');
   const [mobilePane, setMobilePane] = useState<MobilePane>('canvas');
 
@@ -65,8 +74,15 @@ export default function App() {
   );
   const [activeDrawTool, setActiveDrawTool] = useState<CanvasDrawTool>('select');
 
+  const [logicSubTab, setLogicSubTab] = useState<'Cluster' | 'Infotainment'>('Infotainment');
   const [logicNodes, setLogicNodes] = useState<LogicNode[]>(DEFAULT_LOGIC_NODES);
   const [logicWires, setLogicWires] = useState<LogicWire[]>(DEFAULT_LOGIC_WIRES);
+  const [clusterLogicNodes, setClusterLogicNodes] = useState<LogicNode[]>(
+    DEFAULT_CLUSTER_LOGIC_NODES
+  );
+  const [clusterLogicWires, setClusterLogicWires] = useState<LogicWire[]>(
+    DEFAULT_CLUSTER_LOGIC_WIRES
+  );
   const [selectedLogicNodeId, setSelectedLogicNodeId] = useState<string>('node-on-key');
   const [tracks, setTracks] = useState<TransitionTrack[]>(DEFAULT_TRANSITION_TRACKS);
   const [playheadMs, setPlayheadMs] = useState<number>(500);
@@ -78,6 +94,7 @@ export default function App() {
   const [addedPrimitives, setAddedPrimitives] = useState<
     Array<{ id: string; kind: (typeof PRIMITIVE_MENU_ITEMS)[number] }>
   >([]);
+  const [addedLights, setAddedLights] = useState<AddedLight3D[]>([]);
   const [showContextMenu, setShowContextMenu] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
 
@@ -147,8 +164,21 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [user, activeProjectId, fetchLatestTelemetry]);
 
-  // Execute Logic Editor step
+  const activeLogicNodes = logicSubTab === 'Infotainment' ? logicNodes : clusterLogicNodes;
+  const activeLogicWires = logicSubTab === 'Infotainment' ? logicWires : clusterLogicWires;
+  const setActiveLogicNodes = logicSubTab === 'Infotainment' ? setLogicNodes : setClusterLogicNodes;
+  const setActiveLogicWires = logicSubTab === 'Infotainment' ? setLogicWires : setClusterLogicWires;
+
   const handleTriggerLogicStep = useCallback(() => {
+    if (logicSubTab === 'Cluster') {
+      setTelemetry((prev) => ({
+        ...prev,
+        powerKw: Math.max(0, prev.powerKw - 1),
+      }));
+      appendLog('info', 'Cluster::ClampGaugeSweep executed -> Gauge Right updated.');
+      return;
+    }
+
     const keyNode = logicNodes.find((n) => n.id === 'node-on-key');
     if (keyNode && !keyNode.enabled) {
       appendLog('info', 'Logic::OnKeyPressDown skipped (node disabled).');
@@ -162,7 +192,7 @@ export default function App() {
       speedKmh: Math.max(0, prev.speedKmh - step),
     }));
     appendLog('info', `Logic::Substract executed -> Speed value decremented by ${step} km/h.`);
-  }, [logicNodes, appendLog]);
+  }, [logicSubTab, logicNodes, appendLog]);
 
   useEffect(() => {
     if (!isSimulating) return;
@@ -173,6 +203,7 @@ export default function App() {
   }, [isSimulating]);
 
   const handleSelectViewportTab = (tab: ViewportTab) => {
+    setOpenViewportTabs((prev) => (prev.includes(tab) ? prev : [...prev, tab]));
     setActiveViewportTab(tab);
     if (tab === 'Cluster') {
       setBottomPanelMode('Transition Editor');
@@ -183,7 +214,6 @@ export default function App() {
     }
   };
 
-  // Select any node or HMI layer and load its properties into Attributes Editor
   const handleSelectElement = useCallback(
     (nodeId: string, name: string, type: string) => {
       const layer = hmiLayers.find((l) => l.id === nodeId);
@@ -210,13 +240,20 @@ export default function App() {
           cornerRadius: layer.cornerRadius,
           fillColor: layer.fillColor,
           fillOpacity: layer.fillOpacity,
+          fillBlend: layer.fillBlend || 'Normal',
           fillVisible: layer.fillVisible,
           strokeColor: layer.strokeColor,
           strokeWidth: layer.strokeWidth,
+          strokeOpacity: layer.strokeOpacity ?? 100,
+          strokeBlend: layer.strokeBlend || 'Normal',
+          strokeVisible: layer.strokeVisible ?? layer.strokeWidth > 0,
           strokeAlign: layer.strokeAlign,
           tintColor: layer.tintColor,
+          tintVisible: layer.tintVisible ?? false,
           shadowColor: layer.shadowColor,
+          shadowVisible: layer.shadowVisible ?? false,
           backgroundBlur: layer.backgroundBlur,
+          blurVisible: layer.blurVisible ?? layer.backgroundBlur > 0,
           textContent: layer.text,
           fontFamily: layer.fontFamily,
           fontWeight: layer.fontWeight,
@@ -242,16 +279,22 @@ export default function App() {
         cornerRadius: ov?.cornerRadius ?? prev.cornerRadius,
         strokeColor: ov?.strokeColor ?? prev.strokeColor,
         strokeWidth: ov?.strokeWidth ?? prev.strokeWidth,
+        strokeVisible: ov?.strokeVisible ?? true,
         fillColor: ov?.fillColor ?? prev.fillColor,
+        textContent: ov?.textContent ?? prev.textContent,
       }));
     },
     [hmiLayers, widgetOverrides]
   );
 
-  // Create new HMI Layer on Cluster Canvas & add to Scene Outliner
   const handleCreateLayer = useCallback(
-    (kind: HmiLayer['kind'], rect: { x: number; y: number; w: number; h: number }) => {
-      const id = `layer-${Date.now()}`;
+    (
+      kind: HmiLayer['kind'],
+      rect: { x: number; y: number; w: number; h: number },
+      customName?: string,
+      customText?: string
+    ) => {
+      const id = `layer-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       const count = hmiLayers.length + 1;
       const labelMap: Record<HmiLayer['kind'], string> = {
         frame: `Frame ${count}`,
@@ -260,9 +303,13 @@ export default function App() {
         pen: `Needle Path ${count}`,
         text: `Label ${count}`,
       };
+      const layerName = customName || labelMap[kind];
+      const layerText =
+        customText ?? (kind === 'text' ? 'DRIVE MODE' : kind === 'frame' ? 'HMI Container' : '');
+
       const newLayer: HmiLayer = {
         id,
-        name: labelMap[kind],
+        name: layerName,
         kind,
         x: rect.x,
         y: rect.y,
@@ -274,14 +321,21 @@ export default function App() {
         zOrder: 1000 + count * 10,
         fillColor: kind === 'text' ? '#E5EAF2' : kind === 'frame' ? '#1E293B' : '#24B0FF',
         fillOpacity: kind === 'frame' ? 20 : 85,
+        fillBlend: 'Normal',
         fillVisible: kind !== 'frame',
         strokeColor: kind === 'frame' ? '#10B981' : '#24B0FF',
         strokeWidth: kind === 'text' ? 0 : 1,
+        strokeOpacity: 100,
+        strokeBlend: 'Normal',
+        strokeVisible: kind !== 'text',
         strokeAlign: 'Outside',
         tintColor: '#FF24F6',
+        tintVisible: false,
         shadowColor: '#F59E0B',
+        shadowVisible: false,
         backgroundBlur: 0,
-        text: kind === 'text' ? 'DRIVE MODE' : kind === 'frame' ? 'HMI Container' : '',
+        blurVisible: false,
+        text: layerText,
         fontFamily: 'Saira Semi Condensed',
         fontWeight: 'SemiBold',
         fontSize: 13,
@@ -298,12 +352,7 @@ export default function App() {
         {
           id,
           name: newLayer.name,
-          type:
-            kind === 'text'
-              ? 'text'
-              : kind === 'frame'
-              ? 'frame'
-              : 'shape',
+          type: kind === 'text' ? 'text' : kind === 'frame' ? 'frame' : 'shape',
           visible: true,
           locked: false,
           layerId: id,
@@ -327,13 +376,20 @@ export default function App() {
         fillVisible: newLayer.fillVisible,
         strokeColor: newLayer.strokeColor,
         strokeWidth: newLayer.strokeWidth,
+        strokeVisible: newLayer.strokeVisible ?? true,
+        tintVisible: false,
+        shadowVisible: false,
+        blurVisible: false,
         textContent: newLayer.text,
         fontFamily: newLayer.fontFamily,
         fontWeight: newLayer.fontWeight,
         fontSize: newLayer.fontSize,
         backgroundBlur: newLayer.backgroundBlur,
       }));
-      appendLog('info', `Canvas::CreateElement(${kind}, ${newLayer.w}x${newLayer.h}) -> "${newLayer.name}"`);
+      appendLog(
+        'info',
+        `Canvas::CreateElement(${kind}, ${newLayer.w}x${newLayer.h}) -> "${newLayer.name}"`
+      );
     },
     [hmiLayers.length, appendLog]
   );
@@ -349,6 +405,7 @@ export default function App() {
         w: patch.w ?? prev.w,
         h: patch.h ?? prev.h,
         angle: patch.rotation ?? prev.angle,
+        textContent: patch.text ?? prev.textContent,
       };
     });
   }, []);
@@ -364,6 +421,56 @@ export default function App() {
     },
     [appendLog]
   );
+
+  const handleDuplicateSelected = useCallback(() => {
+    const layer = hmiLayers.find((l) => l.id === attributes.selectedNodeId);
+    if (layer) {
+      handleCreateLayer(
+        layer.kind,
+        { x: layer.x + 16, y: layer.y + 16, w: layer.w, h: layer.h },
+        `${layer.name} Copy`,
+        layer.text
+      );
+    } else {
+      handleCreateLayer('rectangle', { x: 240, y: 110, w: 104, h: 52 });
+    }
+  }, [hmiLayers, attributes.selectedNodeId, handleCreateLayer]);
+
+  const handleDeletePrimitive = useCallback(
+    (primitiveId: string) => {
+      setAddedPrimitives((prev) => prev.filter((p) => p.id !== primitiveId));
+      setSceneTree((prev) => prev.filter((n) => n.id !== primitiveId));
+      appendLog('info', `Scene::DeletePrimitive(${primitiveId})`);
+    },
+    [appendLog]
+  );
+
+  const handleDeleteSelected = useCallback(() => {
+    const isLayer = hmiLayers.some((l) => l.id === attributes.selectedNodeId);
+    if (isLayer) {
+      handleDeleteLayer(attributes.selectedNodeId);
+      return;
+    }
+    const isPrim = addedPrimitives.some((p) => p.id === attributes.selectedNodeId);
+    if (isPrim) {
+      handleDeletePrimitive(attributes.selectedNodeId);
+      return;
+    }
+    const isLight = addedLights.some((l) => l.id === attributes.selectedNodeId);
+    if (isLight) {
+      setAddedLights((prev) => prev.filter((l) => l.id !== attributes.selectedNodeId));
+      setSceneTree((prev) => prev.filter((n) => n.id !== attributes.selectedNodeId));
+      appendLog('info', `Scene::DeleteLight(${attributes.selectedNodeId})`);
+    }
+  }, [
+    hmiLayers,
+    addedPrimitives,
+    addedLights,
+    attributes.selectedNodeId,
+    handleDeleteLayer,
+    handleDeletePrimitive,
+    appendLog,
+  ]);
 
   const handleUpdateWidgetOverride = useCallback(
     (widgetId: string, patch: Partial<BuiltInWidgetOverride>) => {
@@ -390,7 +497,6 @@ export default function App() {
     []
   );
 
-  // Update Attributes Editor -> propagate changes directly to selected HmiLayer or BuiltInWidgetOverride
   const handleUpdateAttributes = useCallback((patch: Partial<AttributesState>) => {
     setAttributes((prev) => {
       const next = { ...prev, ...patch };
@@ -414,13 +520,20 @@ export default function App() {
                 cornerRadius: next.cornerRadius,
                 fillColor: next.fillColor,
                 fillOpacity: next.fillOpacity,
+                fillBlend: next.fillBlend,
                 fillVisible: next.fillVisible,
                 strokeColor: next.strokeColor,
                 strokeWidth: next.strokeWidth,
+                strokeOpacity: next.strokeOpacity,
+                strokeBlend: next.strokeBlend,
+                strokeVisible: next.strokeVisible,
                 strokeAlign: next.strokeAlign,
                 tintColor: next.tintColor,
+                tintVisible: next.tintVisible,
                 shadowColor: next.shadowColor,
+                shadowVisible: next.shadowVisible,
                 backgroundBlur: next.backgroundBlur,
+                blurVisible: next.blurVisible,
                 text: next.textContent,
                 fontFamily: next.fontFamily,
                 fontWeight: next.fontWeight,
@@ -434,14 +547,12 @@ export default function App() {
         );
       });
 
-      // Also sync Scene Outliner name if renamed
       if (patch.objectName !== undefined) {
         setSceneTree((tree) =>
           tree.map((n) => (n.id === targetId ? { ...n, name: next.objectName } : n))
         );
       }
 
-      // If built-in widget, apply relevant visual overrides
       const builtInIds = ['time', 'minutes-label', 'gauge-right', 'proj-car-viz', 'trip-computer'];
       if (builtInIds.includes(targetId)) {
         setWidgetOverrides((prevOv) => {
@@ -465,8 +576,13 @@ export default function App() {
               fillColor: patch.fillColor !== undefined ? patch.fillColor : curr.fillColor,
               strokeColor: patch.strokeColor !== undefined ? patch.strokeColor : curr.strokeColor,
               strokeWidth: patch.strokeWidth !== undefined ? patch.strokeWidth : curr.strokeWidth,
+              strokeVisible:
+                patch.strokeVisible !== undefined ? patch.strokeVisible : curr.strokeVisible,
               fontSize: patch.fontSize !== undefined ? patch.fontSize : curr.fontSize,
               fontFamily: patch.fontFamily !== undefined ? patch.fontFamily : curr.fontFamily,
+              letterSpacing:
+                patch.letterSpacing !== undefined ? patch.letterSpacing : curr.letterSpacing,
+              textContent: patch.textContent !== undefined ? patch.textContent : curr.textContent,
             },
           };
         });
@@ -476,25 +592,119 @@ export default function App() {
     });
   }, []);
 
-  // Keyboard listener (ArrowDown logic step + Delete selected HMI layer)
+  const handleSaveProject = useCallback(async () => {
+    if (!user) {
+      setModalInitialTab('auth');
+      setModalOpen(true);
+      return;
+    }
+    setIsSavingProject(true);
+    try {
+      const payload = {
+        name: activeProjectName,
+        activeTab: activeViewportTab,
+        sceneGraph: {
+          sceneTree,
+          projectTree,
+          addedPrimitives,
+          addedLights,
+          hmiLayers,
+          widgetOverrides,
+        },
+        attributesState: attributes as unknown as Record<string, unknown>,
+        logicGraph: {
+          nodes: logicNodes,
+          wires: logicWires,
+          clusterNodes: clusterLogicNodes,
+          clusterWires: clusterLogicWires,
+        },
+        transitions: { tracks, playheadMs, easing },
+        codeDocument,
+      };
+      const url = activeProjectId ? `/api/projects/${activeProjectId}` : '/api/projects';
+      const method = activeProjectId ? 'PUT' : 'POST';
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok && data.project) {
+        setActiveProjectId(data.project.id);
+        setActiveProjectName(data.project.name);
+        appendLog('info', `PostgreSQL::SaveProject("${data.project.name}") -> ${data.project.id}`);
+      } else {
+        appendLog('error', `PostgreSQL::SaveProject failed: ${data.error || 'Unknown error'}`);
+      }
+    } finally {
+      setIsSavingProject(false);
+    }
+  }, [
+    user,
+    activeProjectName,
+    activeViewportTab,
+    sceneTree,
+    projectTree,
+    addedPrimitives,
+    addedLights,
+    hmiLayers,
+    widgetOverrides,
+    attributes,
+    logicNodes,
+    logicWires,
+    clusterLogicNodes,
+    clusterLogicWires,
+    tracks,
+    playheadMs,
+    easing,
+    codeDocument,
+    activeProjectId,
+    appendLog,
+  ]);
+
+  // Global keyboard shortcuts matching Studio menu bindings
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (e.key === 'ArrowDown') {
+      const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        handleSaveProject();
+        return;
+      }
+
+      if (inInput) return;
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        handleDuplicateSelected();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'g') {
+        e.preventDefault();
+        handleCreateLayer('frame', { x: 220, y: 90, w: 180, h: 110 });
+      } else if (e.key === ' ') {
+        e.preventDefault();
+        setIsSimulating((s) => !s);
+      } else if (e.key === 'Escape') {
+        setActiveDrawTool('select');
+        setShowContextMenu(false);
+      } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         handleTriggerLogicStep();
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        const isCustomLayer = hmiLayers.some((l) => l.id === attributes.selectedNodeId);
-        if (isCustomLayer) {
-          e.preventDefault();
-          handleDeleteLayer(attributes.selectedNodeId);
-        }
+        e.preventDefault();
+        handleDeleteSelected();
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [handleTriggerLogicStep, hmiLayers, attributes.selectedNodeId, handleDeleteLayer]);
+  }, [
+    handleSaveProject,
+    handleDuplicateSelected,
+    handleCreateLayer,
+    handleTriggerLogicStep,
+    handleDeleteSelected,
+  ]);
 
   const handleToggleNodeExpanded = (nodeId: string) => {
     const toggle = (list: SceneNode[]): SceneNode[] =>
@@ -504,6 +714,16 @@ export default function App() {
         children: n.children ? toggle(n.children) : undefined,
       }));
     setSceneTree((prev) => toggle(prev));
+  };
+
+  const handleExpandAllSceneNodes = (expanded: boolean) => {
+    const walk = (list: SceneNode[]): SceneNode[] =>
+      list.map((n) => ({
+        ...n,
+        expanded: n.children ? expanded : n.expanded,
+        children: n.children ? walk(n.children) : undefined,
+      }));
+    setSceneTree((prev) => walk(prev));
   };
 
   const handleToggleNodeVisibility = (nodeId: string) => {
@@ -569,7 +789,7 @@ export default function App() {
         : node.type === 'frame'
         ? 'Frame'
         : node.type === 'mesh'
-        ? node.primitiveKind || '3D Mesh'
+        ? '3D Mesh'
         : 'Rectangle';
     handleSelectElement(node.id, node.name, typeLabel);
   };
@@ -604,44 +824,79 @@ export default function App() {
       objectName: `${kind} ${addedPrimitives.length + 1}`,
       objectType: '3D Mesh',
     }));
-    setActiveViewportTab('Cluster');
+    handleSelectViewportTab('Cluster');
     appendLog('info', `Scene::CreatePrimitive(${kind}) added to 3D viewport.`);
+  };
+
+  const handleAddLight = (lightKind: LightKind3D) => {
+    const id = `light-${Date.now()}`;
+    setAddedLights((prev) => [
+      ...prev,
+      {
+        id,
+        kind: lightKind,
+        color: lightKind === 'Rim Light' ? '#38BDF8' : '#FFF4EA',
+        intensity: 1.4,
+      },
+    ]);
+    setSceneTree((prev) => [
+      ...prev,
+      {
+        id,
+        name: `${lightKind} ${addedLights.length + 1}`,
+        type: 'light',
+        lightKind,
+        visible: true,
+        locked: false,
+      },
+    ]);
+    handleSelectViewportTab('Cluster');
+    appendLog('info', `Scene::AddLight(${lightKind}) added to 3D scene.`);
   };
 
   const handleCreateContextElement = (itemLabel: string) => {
     if (itemLabel === 'Label' || itemLabel === 'Text') {
       handleCreateLayer('text', { x: 280, y: 120, w: 128, h: 32 });
-      setActiveViewportTab('Infotainment');
+      handleSelectViewportTab('Infotainment');
     } else if (itemLabel === 'Group' || itemLabel === 'Overlay') {
-      handleCreateLayer('frame', { x: 220, y: 90, w: 180, h: 110 });
-      setActiveViewportTab('Infotainment');
+      handleCreateLayer('frame', { x: 220, y: 90, w: 180, h: 110 }, itemLabel);
+      handleSelectViewportTab('Infotainment');
     } else if (itemLabel === 'Rectangle') {
       handleCreateLayer('rectangle', { x: 260, y: 110, w: 110, h: 56 });
-      setActiveViewportTab('Infotainment');
+      handleSelectViewportTab('Infotainment');
     } else if (itemLabel === 'Vector') {
       handleCreateLayer('vector', { x: 260, y: 110, w: 64, h: 64 });
-      setActiveViewportTab('Infotainment');
+      handleSelectViewportTab('Infotainment');
     } else if (itemLabel === 'Pen Path') {
       handleCreateLayer('pen', { x: 260, y: 110, w: 110, h: 60 });
-      setActiveViewportTab('Infotainment');
+      handleSelectViewportTab('Infotainment');
     } else if (itemLabel === 'Mesh') {
       handleAddPrimitive('Cube');
+    } else if (itemLabel === 'Camera') {
+      handleSelectViewportTab('Cluster');
+      appendLog('info', 'Scene::ActivateViewportCamera() -> Perspective Rig focused.');
     } else {
-      appendLog('info', `Scene::InsertComponent("${itemLabel}")`);
+      handleCreateLayer(
+        'rectangle',
+        { x: 250, y: 105, w: 132, h: 44 },
+        itemLabel,
+        itemLabel.toUpperCase()
+      );
+      handleSelectViewportTab('Infotainment');
     }
   };
 
   const handleMoveLogicNode = (nodeId: string, x: number, y: number) => {
-    setLogicNodes((prev) => prev.map((n) => (n.id === nodeId ? { ...n, x, y } : n)));
+    setActiveLogicNodes((prev) => prev.map((n) => (n.id === nodeId ? { ...n, x, y } : n)));
   };
 
   const handleUpdateLogicNode = (nodeId: string, patch: Partial<LogicNode>) => {
-    setLogicNodes((prev) => prev.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)));
+    setActiveLogicNodes((prev) => prev.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)));
   };
 
   const handleDeleteLogicNode = (nodeId: string) => {
-    setLogicNodes((prev) => prev.filter((n) => n.id !== nodeId));
-    setLogicWires((prev) =>
+    setActiveLogicNodes((prev) => prev.filter((n) => n.id !== nodeId));
+    setActiveLogicWires((prev) =>
       prev.filter((w) => w.fromNodeId !== nodeId && w.toNodeId !== nodeId)
     );
   };
@@ -652,8 +907,8 @@ export default function App() {
       id,
       title,
       nodeType: kind,
-      x: 240 + (logicNodes.length % 4) * 35,
-      y: 60 + (logicNodes.length % 3) * 28,
+      x: 240 + (activeLogicNodes.length % 4) * 35,
+      y: 60 + (activeLogicNodes.length % 3) * 28,
       width: 170,
       value: kind === 'variable' ? 0 : undefined,
       enabled: true,
@@ -679,7 +934,7 @@ export default function App() {
               { id: `${id}-out`, label: 'Output', kind: 'data', direction: 'out', color: '#45B87A' },
             ],
     };
-    setLogicNodes((prev) => [...prev, newNode]);
+    setActiveLogicNodes((prev) => [...prev, newNode]);
     setSelectedLogicNodeId(id);
     appendLog('info', `Logic::AddNode("${title}")`);
   };
@@ -690,7 +945,7 @@ export default function App() {
     toNodeId: string,
     toPinId: string
   ) => {
-    const exists = logicWires.some(
+    const exists = activeLogicWires.some(
       (w) =>
         w.fromNodeId === fromNodeId &&
         w.fromPinId === fromPinId &&
@@ -698,7 +953,7 @@ export default function App() {
         w.toPinId === toPinId
     );
     if (exists) return;
-    setLogicWires((prev) => [
+    setActiveLogicWires((prev) => [
       ...prev,
       {
         id: `wire-${Date.now()}`,
@@ -713,11 +968,11 @@ export default function App() {
   };
 
   const handleDeleteWire = (wireId: string) => {
-    setLogicWires((prev) => prev.filter((w) => w.id !== wireId));
+    setActiveLogicWires((prev) => prev.filter((w) => w.id !== wireId));
   };
 
   const handleAlignNodes = (align: 'left' | 'center' | 'right') => {
-    setLogicNodes((prev) =>
+    setActiveLogicNodes((prev) =>
       prev.map((n, idx) => {
         if (align === 'left') return { ...n, x: 40 + (idx % 2) * 240 };
         if (align === 'right') return { ...n, x: 520 - (idx % 2) * 200 };
@@ -758,42 +1013,50 @@ export default function App() {
     }));
   }, []);
 
-  const buildProjectPayload = (nameOverride?: string) => ({
-    name: nameOverride || activeProjectName,
-    activeTab: activeViewportTab,
-    sceneGraph: { sceneTree, projectTree, addedPrimitives, hmiLayers, widgetOverrides },
-    attributesState: attributes as unknown as Record<string, unknown>,
-    logicGraph: { nodes: logicNodes, wires: logicWires },
-    transitions: { tracks, playheadMs, easing },
-    codeDocument,
-  });
+  const handleExportHtml = useCallback(() => {
+    const blob = new Blob([codeDocument], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${activeProjectName.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'cockpit-hmi'}.html`;
+    a.click();
+    URL.revokeObjectURL(url);
+    appendLog('info', `Export::HtmlBundle("${activeProjectName}.html") downloaded.`);
+  }, [codeDocument, activeProjectName, appendLog]);
 
-  const handleSaveProject = async () => {
-    if (!user) {
-      setModalInitialTab('auth');
-      setModalOpen(true);
-      return;
-    }
-    setIsSavingProject(true);
-    try {
-      const payload = buildProjectPayload();
-      const url = activeProjectId ? `/api/projects/${activeProjectId}` : '/api/projects';
-      const method = activeProjectId ? 'PUT' : 'POST';
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (res.ok && data.project) {
-        setActiveProjectId(data.project.id);
-        setActiveProjectName(data.project.name);
-        appendLog('info', `PostgreSQL::SaveProject("${data.project.name}") -> ${data.project.id}`);
-      } else {
-        appendLog('error', `PostgreSQL::SaveProject failed: ${data.error || 'Unknown error'}`);
-      }
-    } finally {
-      setIsSavingProject(false);
+  const handleResetWorkspace = useCallback(() => {
+    setSceneTree(DEFAULT_SCENE_TREE);
+    setProjectTree(DEFAULT_PROJECT_TREE);
+    setAttributes(DEFAULT_ATTRIBUTES);
+    setHmiLayers([]);
+    setWidgetOverrides({});
+    setAddedPrimitives([]);
+    setAddedLights([]);
+    setLogicNodes(DEFAULT_LOGIC_NODES);
+    setLogicWires(DEFAULT_LOGIC_WIRES);
+    setClusterLogicNodes(DEFAULT_CLUSTER_LOGIC_NODES);
+    setClusterLogicWires(DEFAULT_CLUSTER_LOGIC_WIRES);
+    setTracks(DEFAULT_TRANSITION_TRACKS);
+    setPlayheadMs(500);
+    setEasing(DEFAULT_EASING_CONFIG);
+    setCodeDocument(DEFAULT_CODE_DOCUMENT);
+    setTelemetry(DEFAULT_TELEMETRY_SNAPSHOT);
+    setIsSimulating(false);
+    appendLog('info', 'Workspace::ResetDefaults() completed.');
+  }, [appendLog]);
+
+  const handleUseAssetDatabaseItem = (assetName: string) => {
+    if (assetName === 'EV_Coupe_Hero.glb') {
+      handleAddPrimitive('Dome');
+    } else if (assetName === 'Road_Beam_Glow.glsl') {
+      handleUpdateAttributes({ shadowVisible: true, shadowColor: '#E5A28E' });
+      appendLog('info', `Asset::ApplyShader("${assetName}") -> Glow active.`);
+    } else if (assetName === 'Gauge_Needle_Mask.png') {
+      handleCreateLayer('pen', { x: 250, y: 110, w: 120, h: 60 }, 'Gauge Needle Mask');
+      handleSelectViewportTab('Infotainment');
+    } else if (assetName === 'SairaSemiCondensed.ttf') {
+      handleUpdateAttributes({ fontFamily: 'Saira Semi Condensed' });
+      appendLog('info', `Asset::ApplyFont("${assetName}") -> Saira Semi Condensed.`);
     }
   };
 
@@ -802,7 +1065,27 @@ export default function App() {
     const res = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(buildProjectPayload(name)),
+      body: JSON.stringify({
+        name,
+        activeTab: activeViewportTab,
+        sceneGraph: {
+          sceneTree,
+          projectTree,
+          addedPrimitives,
+          addedLights,
+          hmiLayers,
+          widgetOverrides,
+        },
+        attributesState: attributes as unknown as Record<string, unknown>,
+        logicGraph: {
+          nodes: logicNodes,
+          wires: logicWires,
+          clusterNodes: clusterLogicNodes,
+          clusterWires: clusterLogicWires,
+        },
+        transitions: { tracks, playheadMs, easing },
+        codeDocument,
+      }),
     });
     const data = await res.json();
     if (res.ok && data.project) {
@@ -829,11 +1112,14 @@ export default function App() {
     if (project.sceneGraph?.sceneTree) setSceneTree(project.sceneGraph.sceneTree);
     if (project.sceneGraph?.projectTree) setProjectTree(project.sceneGraph.projectTree);
     if (project.sceneGraph?.addedPrimitives) setAddedPrimitives(project.sceneGraph.addedPrimitives);
+    if (project.sceneGraph?.addedLights) setAddedLights(project.sceneGraph.addedLights);
     if (project.sceneGraph?.hmiLayers) setHmiLayers(project.sceneGraph.hmiLayers);
     if (project.sceneGraph?.widgetOverrides) setWidgetOverrides(project.sceneGraph.widgetOverrides);
     if (project.attributesState) setAttributes(project.attributesState);
     if (project.logicGraph?.nodes) setLogicNodes(project.logicGraph.nodes);
     if (project.logicGraph?.wires) setLogicWires(project.logicGraph.wires);
+    if (project.logicGraph?.clusterNodes) setClusterLogicNodes(project.logicGraph.clusterNodes);
+    if (project.logicGraph?.clusterWires) setClusterLogicWires(project.logicGraph.clusterWires);
     if (project.transitions?.tracks) setTracks(project.transitions.tracks);
     if (project.transitions?.easing) setEasing(project.transitions.easing);
     if (typeof project.codeDocument === 'string') setCodeDocument(project.codeDocument);
@@ -843,89 +1129,93 @@ export default function App() {
   const isEditingCustomLayer = hmiLayers.some((l) => l.id === attributes.selectedNodeId);
 
   return (
-    <div
-      className={`min-h-screen w-full studio-backdrop flex items-center justify-center ${
-        isFramedWindow ? 'p-0 lg:p-5 xl:p-7' : 'p-0'
-      }`}
-    >
-      <div
-        className={`w-full flex flex-col bg-[#121419] overflow-hidden ${
-          isFramedWindow
-            ? 'h-screen lg:h-[calc(100vh-2.5rem)] xl:h-[calc(100vh-3.5rem)] lg:max-w-[1540px] lg:rounded-[6px] lg:border lg:border-[#2C313D] lg:shadow-[0_32px_90px_rgba(0,0,0,0.85)]'
-            : 'h-screen'
-        }`}
-      >
-        <TopStudioBar
-          activeViewportTab={activeViewportTab}
-          onSelectViewportTab={handleSelectViewportTab}
-          bottomPanelMode={bottomPanelMode}
-          onSelectBottomPanelMode={setBottomPanelMode}
-          isSimulating={isSimulating}
-          onToggleSimulation={() => setIsSimulating((s) => !s)}
-          onStopSimulation={() => {
-            setIsSimulating(false);
-            setPlayheadMs(500);
-          }}
-          onTriggerLogicStep={handleTriggerLogicStep}
-          user={user}
-          projectName={activeProjectName}
-          isSavingProject={isSavingProject}
-          onSaveProject={handleSaveProject}
-          onOpenAuthIngestModal={(initialTab = 'auth') => {
-            setModalInitialTab(initialTab);
-            setModalOpen(true);
-          }}
-          isFramedWindow={isFramedWindow}
-          onToggleFramedWindow={() => setIsFramedWindow((v) => !v)}
-          mobilePane={mobilePane}
-          onSelectMobilePane={setMobilePane}
-        />
+    <div className="h-screen w-screen flex flex-col bg-[#121419] overflow-hidden">
+      <TopStudioBar
+        activeViewportTab={activeViewportTab}
+        onSelectViewportTab={handleSelectViewportTab}
+        bottomPanelMode={bottomPanelMode}
+        onSelectBottomPanelMode={(mode) => {
+          setBottomPanelMode(mode);
+          setIsBottomCollapsed(false);
+        }}
+        isBottomCollapsed={isBottomCollapsed}
+        onToggleBottomCollapsed={() => setIsBottomCollapsed((c) => !c)}
+        isSimulating={isSimulating}
+        onToggleSimulation={() => setIsSimulating((s) => !s)}
+        onStopSimulation={() => {
+          setIsSimulating(false);
+          setPlayheadMs(500);
+        }}
+        onTriggerLogicStep={handleTriggerLogicStep}
+        user={user}
+        projectName={activeProjectName}
+        isSavingProject={isSavingProject}
+        onSaveProject={handleSaveProject}
+        onExportHtml={handleExportHtml}
+        onDuplicateSelected={handleDuplicateSelected}
+        onDeleteSelected={handleDeleteSelected}
+        onCreateQuickLayer={(kind) => {
+          handleCreateLayer(kind, { x: 240, y: 100, w: 120, h: kind === 'text' ? 32 : 64 });
+          handleSelectViewportTab('Infotainment');
+        }}
+        onResetWorkspace={handleResetWorkspace}
+        onOpenAuthIngestModal={(initialTab = 'auth') => {
+          setModalInitialTab(initialTab);
+          setModalOpen(true);
+        }}
+        mobilePane={mobilePane}
+        onSelectMobilePane={setMobilePane}
+      />
 
-        <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[248px_1fr_284px] xl:grid-cols-[258px_1fr_296px]">
-          <div
-            className={`${
-              mobilePane === 'outliner' ? 'flex' : 'hidden'
-            } lg:flex flex-col min-h-0 overflow-hidden`}
-          >
-            <LeftOutlinerDock
-              sceneTree={sceneTree}
-              projectTree={projectTree}
-              selectedNodeId={attributes.selectedNodeId}
-              onSelectSceneNode={handleSelectSceneNode}
-              onToggleNodeExpanded={handleToggleNodeExpanded}
-              onToggleNodeVisibility={handleToggleNodeVisibility}
-              onToggleNodeLock={handleToggleNodeLock}
-              onSelectProjectNode={handleSelectProjectNode}
-              onAddPrimitive={handleAddPrimitive}
-              onCreateContextElement={handleCreateContextElement}
-              logs={logs}
-              attributes={attributes}
-              onUpdateAttributes={handleUpdateAttributes}
-              showContextMenu={showContextMenu}
-              onToggleContextMenu={setShowContextMenu}
-            />
-          </div>
+      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[248px_1fr_284px] xl:grid-cols-[258px_1fr_296px]">
+        <div
+          className={`${
+            mobilePane === 'outliner' ? 'flex' : 'hidden'
+          } lg:flex flex-col min-h-0 overflow-hidden`}
+        >
+          <LeftOutlinerDock
+            sceneTree={sceneTree}
+            projectTree={projectTree}
+            selectedNodeId={attributes.selectedNodeId}
+            onSelectSceneNode={handleSelectSceneNode}
+            onToggleNodeExpanded={handleToggleNodeExpanded}
+            onToggleNodeVisibility={handleToggleNodeVisibility}
+            onToggleNodeLock={handleToggleNodeLock}
+            onExpandAllSceneNodes={handleExpandAllSceneNodes}
+            onSelectProjectNode={handleSelectProjectNode}
+            onAddPrimitive={handleAddPrimitive}
+            onAddLight={handleAddLight}
+            onCreateContextElement={handleCreateContextElement}
+            onDuplicateSelected={handleDuplicateSelected}
+            onDeleteSelected={handleDeleteSelected}
+            onClearConsoleLogs={() => setLogs([])}
+            logs={logs}
+            showContextMenu={showContextMenu}
+            onToggleContextMenu={setShowContextMenu}
+          />
+        </div>
 
-          <main
-            className={`${
-              mobilePane === 'canvas' || mobilePane === 'logic' ? 'flex' : 'hidden'
-            } lg:flex flex-col min-w-0 min-h-0 overflow-hidden`}
-          >
-            <div className="h-[28px] bg-[#16181D] border-b border-[#232730] flex items-center justify-between px-1 shrink-0">
-              <div className="flex items-center h-full">
-                {(
-                  [
-                    { id: 'Root', icon: Layers },
-                    { id: 'Cluster', icon: Cpu },
-                    { id: 'Infotainment', icon: Monitor },
-                  ] as Array<{ id: ViewportTab; icon: React.ComponentType<{ className?: string }> }>
-                ).map((t) => {
+        <main
+          className={`${
+            mobilePane === 'canvas' || mobilePane === 'logic' ? 'flex' : 'hidden'
+          } lg:flex flex-col min-w-0 min-h-0 overflow-hidden`}
+        >
+          <div className="h-[28px] bg-[#16181D] border-b border-[#232730] flex items-center justify-between px-1 shrink-0">
+            <div className="flex items-center h-full">
+              {(
+                [
+                  { id: 'Root', icon: Layers },
+                  { id: 'Cluster', icon: Cpu },
+                  { id: 'Infotainment', icon: Monitor },
+                ] as Array<{ id: ViewportTab; icon: React.ComponentType<{ className?: string }> }>
+              )
+                .filter((t) => openViewportTabs.includes(t.id))
+                .map((t) => {
                   const Icon = t.icon;
                   const active = activeViewportTab === t.id;
                   return (
-                    <button
+                    <div
                       key={t.id}
-                      type="button"
                       onClick={() => handleSelectViewportTab(t.id)}
                       className={`h-full px-3 flex items-center gap-2 text-[11px] border-r border-[#232730] cursor-pointer transition-colors ${
                         active
@@ -935,23 +1225,82 @@ export default function App() {
                     >
                       <Icon className="w-3 h-3 text-[#60A5FA]" />
                       <span>{t.id}</span>
-                      <X className="w-2.5 h-2.5 opacity-50" />
-                    </button>
+                      {openViewportTabs.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const next = openViewportTabs.filter((x) => x !== t.id);
+                            setOpenViewportTabs(next);
+                            if (activeViewportTab === t.id && next[0]) {
+                              setActiveViewportTab(next[0]);
+                            }
+                          }}
+                          className="opacity-50 hover:opacity-100 hover:text-white cursor-pointer"
+                          title={`Close ${t.id} tab`}
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
-              </div>
-
-              <div className="hidden sm:flex items-center gap-2 pr-2 text-[10px] text-[#6B7280] font-mono-code">
-                <span>{telemetry.sourceSystem}</span>
-              </div>
+              {openViewportTabs.length < 3 && (
+                <button
+                  type="button"
+                  onClick={() => setOpenViewportTabs(['Root', 'Cluster', 'Infotainment'])}
+                  className="px-2 h-full text-[#6B7280] hover:text-white cursor-pointer"
+                  title="Restore All Viewport Tabs"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+              )}
             </div>
 
-            <div
-              className={`${
-                mobilePane === 'logic' ? 'hidden lg:flex' : 'flex'
-              } flex-1 min-h-0 flex-col`}
-            >
-              {activeViewportTab === 'Infotainment' && (
+            <div className="hidden sm:flex items-center gap-2 pr-2 text-[10px] text-[#6B7280] font-mono-code">
+              <span>{telemetry.sourceSystem}</span>
+            </div>
+          </div>
+
+          <div
+            className={`${
+              mobilePane === 'logic' ? 'hidden lg:flex' : 'flex'
+            } flex-1 min-h-0 flex-col`}
+          >
+            {activeViewportTab === 'Infotainment' && (
+              <ClusterHmiCanvas
+                telemetry={telemetry}
+                attributes={attributes}
+                selectedNodeId={attributes.selectedNodeId}
+                onSelectElement={handleSelectElement}
+                hmiLayers={hmiLayers}
+                onCreateLayer={handleCreateLayer}
+                onUpdateLayer={handleUpdateLayer}
+                onDeleteLayer={handleDeleteLayer}
+                widgetOverrides={widgetOverrides}
+                onUpdateWidgetOverride={handleUpdateWidgetOverride}
+                onChangeGear={(gear) => setTelemetry((prev) => ({ ...prev, gear }))}
+                activeDrawTool={activeDrawTool}
+                onChangeDrawTool={setActiveDrawTool}
+                isSimulating={isSimulating}
+                playheadMs={playheadMs}
+              />
+            )}
+
+            {activeViewportTab === 'Cluster' && (
+              <Viewport3D
+                addedPrimitives={addedPrimitives}
+                addedLights={addedLights}
+                onAddPrimitive={handleAddPrimitive}
+                onDeleteSelectedPrimitive={handleDeletePrimitive}
+                attributes={attributes}
+                onSelectMesh={(name, t) => handleMeshTransformSync({ ...t, name })}
+                onMeshTransformChange={handleMeshTransformSync}
+              />
+            )}
+
+            {activeViewportTab === 'Root' && (
+              <div className="flex-1 grid grid-cols-1 md:grid-cols-2 min-h-0 divide-y md:divide-y-0 md:divide-x divide-[#232730]">
                 <ClusterHmiCanvas
                   telemetry={telemetry}
                   attributes={attributes}
@@ -963,52 +1312,26 @@ export default function App() {
                   onDeleteLayer={handleDeleteLayer}
                   widgetOverrides={widgetOverrides}
                   onUpdateWidgetOverride={handleUpdateWidgetOverride}
+                  onChangeGear={(gear) => setTelemetry((prev) => ({ ...prev, gear }))}
                   activeDrawTool={activeDrawTool}
                   onChangeDrawTool={setActiveDrawTool}
                   isSimulating={isSimulating}
                   playheadMs={playheadMs}
                 />
-              )}
-
-              {activeViewportTab === 'Cluster' && (
                 <Viewport3D
                   addedPrimitives={addedPrimitives}
+                  addedLights={addedLights}
                   onAddPrimitive={handleAddPrimitive}
+                  onDeleteSelectedPrimitive={handleDeletePrimitive}
                   attributes={attributes}
                   onSelectMesh={(name, t) => handleMeshTransformSync({ ...t, name })}
                   onMeshTransformChange={handleMeshTransformSync}
                 />
-              )}
+              </div>
+            )}
+          </div>
 
-              {activeViewportTab === 'Root' && (
-                <div className="flex-1 grid grid-cols-1 md:grid-cols-2 min-h-0 divide-y md:divide-y-0 md:divide-x divide-[#232730]">
-                  <ClusterHmiCanvas
-                    telemetry={telemetry}
-                    attributes={attributes}
-                    selectedNodeId={attributes.selectedNodeId}
-                    onSelectElement={handleSelectElement}
-                    hmiLayers={hmiLayers}
-                    onCreateLayer={handleCreateLayer}
-                    onUpdateLayer={handleUpdateLayer}
-                    onDeleteLayer={handleDeleteLayer}
-                    widgetOverrides={widgetOverrides}
-                    onUpdateWidgetOverride={handleUpdateWidgetOverride}
-                    activeDrawTool={activeDrawTool}
-                    onChangeDrawTool={setActiveDrawTool}
-                    isSimulating={isSimulating}
-                    playheadMs={playheadMs}
-                  />
-                  <Viewport3D
-                    addedPrimitives={addedPrimitives}
-                    onAddPrimitive={handleAddPrimitive}
-                    attributes={attributes}
-                    onSelectMesh={(name, t) => handleMeshTransformSync({ ...t, name })}
-                    onMeshTransformChange={handleMeshTransformSync}
-                  />
-                </div>
-              )}
-            </div>
-
+          {!isBottomCollapsed && (
             <div
               className={`${
                 mobilePane === 'logic' ? 'flex-1' : 'hidden lg:flex lg:h-[258px]'
@@ -1017,8 +1340,10 @@ export default function App() {
               <BottomWorkbench
                 mode={bottomPanelMode}
                 onChangeMode={setBottomPanelMode}
-                nodes={logicNodes}
-                wires={logicWires}
+                logicSubTab={logicSubTab}
+                onChangeLogicSubTab={setLogicSubTab}
+                nodes={activeLogicNodes}
+                wires={activeLogicWires}
                 selectedLogicNodeId={selectedLogicNodeId}
                 onSelectLogicNode={setSelectedLogicNodeId}
                 onMoveLogicNode={handleMoveLogicNode}
@@ -1027,35 +1352,69 @@ export default function App() {
                 onAddLogicNode={handleAddLogicNode}
                 onConnectPins={handleConnectPins}
                 onDeleteWire={handleDeleteWire}
+                onClearWires={() => {
+                  setActiveLogicWires([]);
+                  appendLog('info', `Logic::ClearWires(${logicSubTab})`);
+                }}
+                onResetLogicGraph={() => {
+                  if (logicSubTab === 'Infotainment') {
+                    setLogicNodes(DEFAULT_LOGIC_NODES);
+                    setLogicWires(DEFAULT_LOGIC_WIRES);
+                  } else {
+                    setClusterLogicNodes(DEFAULT_CLUSTER_LOGIC_NODES);
+                    setClusterLogicWires(DEFAULT_CLUSTER_LOGIC_WIRES);
+                  }
+                  appendLog('info', `Logic::ResetGraph(${logicSubTab})`);
+                }}
                 onAlignNodes={handleAlignNodes}
                 onTriggerLogicStep={handleTriggerLogicStep}
                 tracks={tracks}
+                onUpdateTrack={(trackId, patch) =>
+                  setTracks((prev) =>
+                    prev.map((t) => (t.id === trackId ? { ...t, ...patch } : t))
+                  )
+                }
                 onAddKeyframeAtPlayhead={handleAddKeyframeAtPlayhead}
                 playheadMs={playheadMs}
                 onChangePlayheadMs={setPlayheadMs}
                 easing={easing}
                 onUpdateEasing={(patch) => setEasing((prev) => ({ ...prev, ...patch }))}
                 currentSpeed={telemetry.speedKmh}
+                onUseAssetDatabaseItem={handleUseAssetDatabaseItem}
               />
             </div>
-          </main>
+          )}
+        </main>
 
-          <div
-            className={`${
-              mobilePane === 'inspector' ? 'flex' : 'hidden'
-            } lg:flex flex-col min-h-0 overflow-hidden`}
-          >
-            <RightInspectorDock
-              attributes={attributes}
-              onUpdateAttributes={handleUpdateAttributes}
-              bottomTab={rightBottomTab}
-              onChangeBottomTab={setRightBottomTab}
-              codeDocument={codeDocument}
-              onChangeCodeDocument={setCodeDocument}
-              logs={logs}
-              isEditingLayer={isEditingCustomLayer}
-            />
-          </div>
+        <div
+          className={`${
+            mobilePane === 'inspector' ? 'flex' : 'hidden'
+          } lg:flex flex-col min-h-0 overflow-hidden`}
+        >
+          <RightInspectorDock
+            attributes={attributes}
+            onUpdateAttributes={handleUpdateAttributes}
+            bottomTab={rightBottomTab}
+            onChangeBottomTab={setRightBottomTab}
+            codeDocument={codeDocument}
+            onChangeCodeDocument={setCodeDocument}
+            onResetCodeDocument={() => setCodeDocument(DEFAULT_CODE_DOCUMENT)}
+            onExportHtml={handleExportHtml}
+            onClearConsoleLogs={() => setLogs([])}
+            onDuplicateSelected={handleDuplicateSelected}
+            onDeleteSelected={handleDeleteSelected}
+            onInsertAssetLayer={(kind, label) => {
+              handleCreateLayer(
+                kind,
+                { x: 240, y: 105, w: 120, h: kind === 'text' ? 32 : 52 },
+                label,
+                label
+              );
+              handleSelectViewportTab('Infotainment');
+            }}
+            logs={logs}
+            isEditingLayer={isEditingCustomLayer}
+          />
         </div>
       </div>
 

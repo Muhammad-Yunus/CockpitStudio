@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Plus,
   Minus,
@@ -10,6 +10,7 @@ import {
   Binary,
   Braces,
   ChevronDown,
+  ChevronRight,
   AlignLeft,
   AlignCenter,
   AlignRight,
@@ -34,6 +35,8 @@ import type {
 interface BottomWorkbenchProps {
   mode: BottomPanelMode;
   onChangeMode: (mode: BottomPanelMode) => void;
+  logicSubTab: 'Cluster' | 'Infotainment';
+  onChangeLogicSubTab: (tab: 'Cluster' | 'Infotainment') => void;
   nodes: LogicNode[];
   wires: LogicWire[];
   selectedLogicNodeId: string;
@@ -44,20 +47,26 @@ interface BottomWorkbenchProps {
   onAddLogicNode: (kind: 'event' | 'variable' | 'math', title: string) => void;
   onConnectPins: (fromNodeId: string, fromPinId: string, toNodeId: string, toPinId: string) => void;
   onDeleteWire: (wireId: string) => void;
+  onClearWires: () => void;
+  onResetLogicGraph: () => void;
   onAlignNodes: (align: 'left' | 'center' | 'right') => void;
   onTriggerLogicStep: () => void;
   tracks: TransitionTrack[];
+  onUpdateTrack: (trackId: string, patch: Partial<TransitionTrack>) => void;
   onAddKeyframeAtPlayhead: () => void;
   playheadMs: number;
   onChangePlayheadMs: (ms: number) => void;
   easing: EasingConfig;
   onUpdateEasing: (patch: Partial<EasingConfig>) => void;
   currentSpeed: number;
+  onUseAssetDatabaseItem: (assetName: string) => void;
 }
 
 export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
   mode,
   onChangeMode,
+  logicSubTab,
+  onChangeLogicSubTab,
   nodes,
   wires,
   selectedLogicNodeId,
@@ -68,18 +77,32 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
   onAddLogicNode,
   onConnectPins,
   onDeleteWire,
+  onClearWires,
+  onResetLogicGraph,
   onAlignNodes,
   onTriggerLogicStep,
   tracks,
+  onUpdateTrack,
   onAddKeyframeAtPlayhead,
   playheadMs,
   onChangePlayheadMs,
   easing,
   onUpdateEasing,
   currentSpeed,
+  onUseAssetDatabaseItem,
 }) => {
-  const [subTab, setSubTab] = useState<'Cluster' | 'Infotainment'>('Infotainment');
+  const [openSubTabs, setOpenSubTabs] = useState<Array<'Cluster' | 'Infotainment'>>([
+    'Cluster',
+    'Infotainment',
+  ]);
   const [timelineZoom, setTimelineZoom] = useState<number>(1);
+  const [timelineFps, setTimelineFps] = useState<30 | 60 | 120>(60);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [paletteSearchOpen, setPaletteSearchOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState('');
+  const [graphSearchOpen, setGraphSearchOpen] = useState(false);
+  const [graphQuery, setGraphQuery] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [pendingSourcePin, setPendingSourcePin] = useState<{
     nodeId: string;
     pinId: string;
@@ -91,7 +114,30 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
     origX: number;
     origY: number;
   } | null>(null);
+  const [draggingTrack, setDraggingTrack] = useState<{
+    id: string;
+    startClientX: number;
+    origStart: number;
+    origEnd: number;
+    laneWidth: number;
+  } | null>(null);
+
   const canvasRef = useRef<HTMLDivElement>(null);
+  const headerMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (
+        headerMenuOpen &&
+        headerMenuRef.current &&
+        !headerMenuRef.current.contains(e.target as Node)
+      ) {
+        setHeaderMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [headerMenuOpen]);
 
   const selectedNode = nodes.find((n) => n.id === selectedLogicNodeId) || nodes[0];
 
@@ -150,7 +196,6 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
   const rulerTicks = [0, 500, 1000, 1500, 2000, 2500];
   const maxMs = Math.round(2500 / timelineZoom);
 
-  // Compute dynamic SVG easing curve path based on easing config
   const curvePath =
     easing.curveType === 'Spring'
       ? 'M 8 40 C 30 2, 46 6, 70 26 C 92 43, 112 20, 134 25'
@@ -160,28 +205,47 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
       ? 'M 8 42 C 36 10, 82 8, 134 8'
       : 'M 8 42 C 58 42, 82 8, 134 8';
 
+  const paletteItems: Array<{
+    label: string;
+    kind: 'event' | 'variable' | 'math';
+    nodeTitle: string;
+    icon: 'zap' | 'pause' | 'comm' | 'math' | 'bin' | 'var';
+  }> = [
+    { label: 'On Scene Show', kind: 'event', nodeTitle: 'On Scene Show', icon: 'zap' },
+    { label: 'On Scene Hide', kind: 'event', nodeTitle: 'On Scene Hide', icon: 'pause' },
+    { label: 'On Key Press: 2', kind: 'event', nodeTitle: 'On Key Press: 2', icon: 'zap' },
+    { label: 'Communication', kind: 'variable', nodeTitle: 'Communication', icon: 'comm' },
+    { label: 'Math', kind: 'math', nodeTitle: 'Math Add', icon: 'math' },
+    { label: 'Binary', kind: 'math', nodeTitle: 'Binary Gate', icon: 'bin' },
+    { label: 'Int Variable', kind: 'variable', nodeTitle: 'Int Variable', icon: 'var' },
+  ];
+
+  const filteredPalette = paletteItems.filter(
+    (item) => !paletteQuery || item.label.toLowerCase().includes(paletteQuery.toLowerCase())
+  );
+
   return (
     <section className="flex flex-col h-full bg-[#16181D] border-t border-[#232730] select-none overflow-hidden">
       {/* Top Panel Header Tabs */}
-      <div className="h-[28px] px-2.5 bg-[#1A1D24] border-b border-[#232730] flex items-center justify-between shrink-0">
+      <div className="h-[28px] px-2.5 bg-[#1A1D24] border-b border-[#232730] flex items-center justify-between shrink-0 relative">
         <div className="flex items-center gap-4">
-          {(
-            ['Logic Editor', 'Transition Editor', 'Asset Database'] as BottomPanelMode[]
-          ).map((tabName) => (
-            <button
-              key={tabName}
-              type="button"
-              onClick={() => onChangeMode(tabName)}
-              className={`text-[11px] font-medium whitespace-nowrap cursor-pointer transition-colors ${
-                mode === tabName ? 'text-[#E5E7EB]' : 'text-[#6B7280] hover:text-[#9CA3AF]'
-              }`}
-            >
-              {tabName}
-            </button>
-          ))}
+          {(['Logic Editor', 'Transition Editor', 'Asset Database'] as BottomPanelMode[]).map(
+            (tabName) => (
+              <button
+                key={tabName}
+                type="button"
+                onClick={() => onChangeMode(tabName)}
+                className={`text-[11px] font-medium whitespace-nowrap cursor-pointer transition-colors ${
+                  mode === tabName ? 'text-[#E5E7EB]' : 'text-[#6B7280] hover:text-[#9CA3AF]'
+                }`}
+              >
+                {tabName}
+              </button>
+            )
+          )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div ref={headerMenuRef} className="flex items-center gap-2 relative">
           {pendingSourcePin && mode === 'Logic Editor' && (
             <span className="text-[10px] text-[#24B0FF]">Click an input pin to wire...</span>
           )}
@@ -190,12 +254,68 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
               type="button"
               onClick={onTriggerLogicStep}
               className="px-2 py-0.5 text-[10px] font-medium bg-[#1E2530] hover:bg-[#273140] text-[#45B87A] border border-[#2C3A33] rounded-[2px] cursor-pointer whitespace-nowrap"
-              title="Execute On Key press - Down -> Substract -> Speed value"
+              title="Execute active Logic Graph step"
             >
               Trigger Step (↓)
             </button>
           )}
-          <Menu className="w-3 h-3 text-[#6B7280]" />
+          <button
+            type="button"
+            onClick={() => setHeaderMenuOpen((o) => !o)}
+            className={`hover:text-white cursor-pointer ${
+              headerMenuOpen ? 'text-[#24B0FF]' : 'text-[#6B7280]'
+            }`}
+            title="Workbench Actions"
+          >
+            <Menu className="w-3 h-3" />
+          </button>
+
+          {headerMenuOpen && (
+            <div className="absolute right-0 bottom-full mb-1 w-48 bg-[#1C1F26] border border-[#2C313D] rounded-[3px] shadow-2xl py-1 z-50 text-[11px]">
+              <button
+                type="button"
+                onClick={() => {
+                  onAlignNodes('center');
+                  setHeaderMenuOpen(false);
+                }}
+                className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+              >
+                Auto-Layout Logic Nodes
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onClearWires();
+                  setHeaderMenuOpen(false);
+                }}
+                className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+              >
+                Clear All Graph Wires
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onResetLogicGraph();
+                  setHeaderMenuOpen(false);
+                }}
+                className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+              >
+                Reset Default Logic Graph
+              </button>
+              <div className="my-1 border-t border-[#262A34]" />
+              <button
+                type="button"
+                onClick={() => {
+                  onAddKeyframeAtPlayhead();
+                  onChangeMode('Transition Editor');
+                  setHeaderMenuOpen(false);
+                }}
+                className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+              >
+                Insert Keyframe at Playhead
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -203,21 +323,46 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
       {mode === 'Logic Editor' && (
         <div className="flex-1 flex flex-col min-h-0">
           <div className="h-[24px] px-1 bg-[#14161B] border-b border-[#232730] flex items-center gap-1 shrink-0">
-            {(['Cluster', 'Infotainment'] as const).map((t) => (
-              <button
+            {openSubTabs.map((t) => (
+              <div
                 key={t}
-                type="button"
-                onClick={() => setSubTab(t)}
+                onClick={() => onChangeLogicSubTab(t)}
                 className={`h-full px-3 flex items-center gap-2 text-[10px] border-r border-[#232730] cursor-pointer ${
-                  subTab === t
+                  logicSubTab === t
                     ? 'bg-[#1B1F27] text-[#E5E7EB] border-b border-b-[#24B0FF]'
                     : 'text-[#6B7280] hover:text-[#9CA3AF]'
                 }`}
               >
                 <span>{t}</span>
-                <X className="w-2.5 h-2.5 opacity-60" />
-              </button>
+                {openSubTabs.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const nextTabs = openSubTabs.filter((x) => x !== t);
+                      setOpenSubTabs(nextTabs);
+                      if (logicSubTab === t && nextTabs[0]) {
+                        onChangeLogicSubTab(nextTabs[0]);
+                      }
+                    }}
+                    className="opacity-60 hover:opacity-100 hover:text-white cursor-pointer"
+                    title={`Close ${t} tab`}
+                  >
+                    <X className="w-2.5 h-2.5" />
+                  </button>
+                )}
+              </div>
             ))}
+            {openSubTabs.length < 2 && (
+              <button
+                type="button"
+                onClick={() => setOpenSubTabs(['Cluster', 'Infotainment'])}
+                className="px-2 h-full text-[#6B7280] hover:text-white cursor-pointer"
+                title="Restore Closed Logic Tab"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+            )}
           </div>
 
           <div className="flex-1 flex min-h-0">
@@ -265,79 +410,85 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
               </button>
             </div>
 
-            {/* Left Node Tree Sidebar (All items clickable to insert nodes) */}
+            {/* Left Node Tree Sidebar */}
             <div className="hidden md:flex w-[166px] bg-[#16181D] border-r border-[#232730] flex-col shrink-0">
               <div className="h-[24px] px-2 border-b border-[#232730] flex items-center justify-between text-[#8E95A2]">
-                <Plus
-                  className="w-3 h-3 cursor-pointer hover:text-white"
+                <button
+                  type="button"
                   onClick={() => onAddLogicNode('variable', 'Custom Signal')}
-                />
-                <Search className="w-3 h-3" />
+                  className="hover:text-white cursor-pointer"
+                  title="Insert Custom Signal Node"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaletteSearchOpen((s) => !s)}
+                  className={`hover:text-white cursor-pointer ${
+                    paletteSearchOpen ? 'text-[#24B0FF]' : ''
+                  }`}
+                  title="Search Node Palette"
+                >
+                  <Search className="w-3 h-3" />
+                </button>
               </div>
-              <div className="flex-1 overflow-y-auto studio-scroll py-1.5 px-1.5 space-y-1 text-[10.5px]">
-                <button
-                  type="button"
-                  onClick={() => onAddLogicNode('event', 'On Scene Show')}
-                  className="w-full flex items-center gap-1.5 px-1 py-0.5 text-[#D1D5DB] hover:bg-[#1E2129] rounded-[2px] cursor-pointer"
-                >
-                  <Zap className="w-3 h-3 text-[#F59E0B]" />
-                  <span className="truncate">On Scene Show</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onAddLogicNode('event', 'On Scene Hide')}
-                  className="w-full flex items-center gap-1.5 px-1 py-0.5 text-[#D1D5DB] hover:bg-[#1E2129] rounded-[2px] cursor-pointer"
-                >
-                  <span className="w-3 h-3 text-[9px] text-[#8E95A2] text-center">||</span>
-                  <span className="truncate">On Scene Hide</span>
-                </button>
-                <div className="px-1 py-0.5 text-[#E5E7EB]">
-                  <div className="flex items-center gap-1">
-                    <ChevronDown className="w-3 h-3 text-[#6B7280]" />
-                    <span className="w-2 h-2 rounded-full bg-[#D1D5DB]" />
-                    <span className="truncate">Left Blinker</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onAddLogicNode('event', 'On Key Press: 2')}
-                    className="w-full pl-4 mt-1 flex items-center gap-1.5 text-[#D1D5DB] hover:text-white cursor-pointer"
-                  >
-                    <Zap className="w-3 h-3 text-[#F59E0B]" />
-                    <span className="truncate">On Key Press: 2</span>
-                  </button>
+              {paletteSearchOpen && (
+                <div className="p-1 border-b border-[#232730] bg-[#121419]">
+                  <input
+                    type="text"
+                    value={paletteQuery}
+                    onChange={(e) => setPaletteQuery(e.target.value)}
+                    placeholder="Filter palette..."
+                    className="w-full px-1.5 py-0.5 text-[10px] bg-[#1A1D24] border border-[#2C313D] rounded-[2px] text-white focus:outline-none focus:border-[#24B0FF]"
+                  />
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onAddLogicNode('variable', 'Communication')}
-                  className="w-full flex items-center gap-1.5 px-1 py-0.5 text-[#9CA3AF] hover:bg-[#1E2129] hover:text-white rounded-[2px] cursor-pointer"
-                >
-                  <span className="text-[10px]">⇄</span>
-                  <span className="truncate">Communication</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onAddLogicNode('math', 'Math Add')}
-                  className="w-full flex items-center gap-1.5 px-1 py-0.5 text-[#9CA3AF] hover:bg-[#1E2129] hover:text-white rounded-[2px] cursor-pointer"
-                >
-                  <span className="text-[10px]">+−</span>
-                  <span className="truncate">Math</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onAddLogicNode('math', 'Binary Gate')}
-                  className="w-full flex items-center gap-1.5 px-1 py-0.5 text-[#9CA3AF] hover:bg-[#1E2129] hover:text-white rounded-[2px] cursor-pointer"
-                >
-                  <Binary className="w-3 h-3" />
-                  <span className="truncate">Binary</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onAddLogicNode('variable', 'Int Variable')}
-                  className="w-full flex items-center gap-1.5 px-1 py-0.5 text-[#45B87A] hover:bg-[#1E2129] rounded-[2px] cursor-pointer"
-                >
-                  <Braces className="w-3 h-3" />
-                  <span className="truncate">Int Variable</span>
-                </button>
+              )}
+              <div className="flex-1 overflow-y-auto studio-scroll py-1.5 px-1.5 space-y-1 text-[10.5px]">
+                {filteredPalette.map((item) => {
+                  if (item.label === 'On Key Press: 2') {
+                    return (
+                      <div key={item.label} className="px-1 py-0.5 text-[#E5E7EB]">
+                        <div className="flex items-center gap-1">
+                          <ChevronDown className="w-3 h-3 text-[#6B7280]" />
+                          <span className="w-2 h-2 rounded-full bg-[#D1D5DB]" />
+                          <span className="truncate">Left Blinker</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onAddLogicNode(item.kind, item.nodeTitle)}
+                          className="w-full pl-4 mt-1 flex items-center gap-1.5 text-[#D1D5DB] hover:text-white cursor-pointer"
+                        >
+                          <Zap className="w-3 h-3 text-[#F59E0B]" />
+                          <span className="truncate">{item.label}</span>
+                        </button>
+                      </div>
+                    );
+                  }
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => onAddLogicNode(item.kind, item.nodeTitle)}
+                      className={`w-full flex items-center gap-1.5 px-1 py-0.5 hover:bg-[#1E2129] rounded-[2px] cursor-pointer ${
+                        item.icon === 'var'
+                          ? 'text-[#45B87A]'
+                          : item.icon === 'zap'
+                          ? 'text-[#D1D5DB]'
+                          : 'text-[#9CA3AF] hover:text-white'
+                      }`}
+                    >
+                      {item.icon === 'zap' && <Zap className="w-3 h-3 text-[#F59E0B]" />}
+                      {item.icon === 'pause' && (
+                        <span className="w-3 h-3 text-[9px] text-[#8E95A2] text-center">||</span>
+                      )}
+                      {item.icon === 'comm' && <span className="text-[10px]">⇄</span>}
+                      {item.icon === 'math' && <span className="text-[10px]">+−</span>}
+                      {item.icon === 'bin' && <Binary className="w-3 h-3" />}
+                      {item.icon === 'var' && <Braces className="w-3 h-3" />}
+                      <span className="truncate">{item.label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -379,8 +530,33 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
                   </button>
                 </div>
                 <div className="flex items-center gap-2 text-[10px] font-mono-code text-[#6B7280]">
+                  {graphSearchOpen && (
+                    <input
+                      type="text"
+                      value={graphQuery}
+                      onChange={(e) => {
+                        const q = e.target.value;
+                        setGraphQuery(q);
+                        const match = nodes.find((n) =>
+                          n.title.toLowerCase().includes(q.toLowerCase())
+                        );
+                        if (match && q.trim()) onSelectLogicNode(match.id);
+                      }}
+                      placeholder="Find node..."
+                      className="w-24 px-1.5 py-0.5 bg-[#121419] border border-[#2C313D] rounded-[2px] text-[10px] text-white focus:outline-none focus:border-[#24B0FF]"
+                    />
+                  )}
                   <span>SpeedOut: {Math.round(currentSpeed)}</span>
-                  <Search className="w-3 h-3" />
+                  <button
+                    type="button"
+                    onClick={() => setGraphSearchOpen((s) => !s)}
+                    className={`hover:text-white cursor-pointer ${
+                      graphSearchOpen ? 'text-[#24B0FF]' : ''
+                    }`}
+                    title="Find Node in Graph"
+                  >
+                    <Search className="w-3 h-3" />
+                  </button>
                 </div>
               </div>
 
@@ -426,6 +602,9 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
 
                   {nodes.map((node) => {
                     const isSelected = node.id === selectedLogicNodeId;
+                    const isSearchMatch =
+                      Boolean(graphQuery.trim()) &&
+                      node.title.toLowerCase().includes(graphQuery.trim().toLowerCase());
                     return (
                       <div
                         key={node.id}
@@ -434,9 +613,14 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
                           left: `${node.x}px`,
                           top: `${node.y}px`,
                           width: `${node.width}px`,
+                          opacity: node.enabled ? 1 : 0.5,
                         }}
                         className={`absolute rounded-[3px] bg-[#1D2028]/95 border shadow-lg cursor-grab active:cursor-grabbing ${
-                          isSelected ? 'border-[#24B0FF]' : 'border-[#2E3442]'
+                          isSelected
+                            ? 'border-[#24B0FF]'
+                            : isSearchMatch
+                            ? 'border-[#F59E0B]'
+                            : 'border-[#2E3442]'
                         }`}
                       >
                         <div className="h-[22px] px-2.5 bg-[#232732] border-b border-[#2E3442] flex items-center justify-between rounded-t-[2px]">
@@ -652,72 +836,164 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
                 <span className="font-mono-code tabular-nums text-[#9CA3AF]">
                   {Math.round(playheadMs)}
                 </span>
-                <SkipBack
-                  className="w-3 h-3 cursor-pointer hover:text-white"
+                <button
+                  type="button"
                   onClick={() => onChangePlayheadMs(0)}
-                />
-                <StepBack
-                  className="w-3 h-3 cursor-pointer hover:text-white"
+                  className="hover:text-white cursor-pointer"
+                  title="Jump to Start"
+                >
+                  <SkipBack className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
                   onClick={() => onChangePlayheadMs(Math.max(0, playheadMs - 100))}
-                />
-                <Play
-                  className="w-3 h-3 cursor-pointer hover:text-[#10B981]"
+                  className="hover:text-white cursor-pointer"
+                  title="Step Back 100ms"
+                >
+                  <StepBack className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
                   onClick={() => onChangePlayheadMs((playheadMs + 250) % maxMs)}
-                />
-                <StepForward
-                  className="w-3 h-3 cursor-pointer hover:text-white"
+                  className="hover:text-[#10B981] cursor-pointer"
+                  title="Advance 250ms"
+                >
+                  <Play className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
                   onClick={() => onChangePlayheadMs(Math.min(maxMs, playheadMs + 100))}
-                />
-                <SkipForward
-                  className="w-3 h-3 cursor-pointer hover:text-white"
+                  className="hover:text-white cursor-pointer"
+                  title="Step Forward 100ms"
+                >
+                  <StepForward className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
                   onClick={() => onChangePlayheadMs(maxMs)}
-                />
-                <span className="font-mono-code tabular-nums text-[#6B7280]">60</span>
+                  className="hover:text-white cursor-pointer"
+                  title="Jump to End"
+                >
+                  <SkipForward className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setTimelineFps((f) => (f === 60 ? 120 : f === 120 ? 30 : 60))
+                  }
+                  className="font-mono-code tabular-nums text-[#6B7280] hover:text-white cursor-pointer"
+                  title="Cycle Frame Rate (30 / 60 / 120 FPS)"
+                >
+                  {timelineFps}
+                </button>
               </div>
             </div>
 
             <div className="flex-1 flex min-h-0 overflow-hidden">
               <div className="w-[140px] sm:w-[164px] bg-[#16181D] border-r border-[#232730] text-[10.5px] overflow-y-auto studio-scroll shrink-0">
                 <div className="h-[20px] border-b border-[#232730]" />
-                <div className="px-2 py-1 flex items-center gap-1.5 text-[#D1D5DB]">
-                  <ChevronDown className="w-3 h-3 text-[#6B7280]" />
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCollapsedGroups((p) => ({ ...p, Button: !p.Button }))
+                  }
+                  className="w-full px-2 py-1 flex items-center gap-1.5 text-[#D1D5DB] hover:bg-[#1E2129] cursor-pointer"
+                >
+                  {collapsedGroups.Button ? (
+                    <ChevronRight className="w-3 h-3 text-[#6B7280]" />
+                  ) : (
+                    <ChevronDown className="w-3 h-3 text-[#6B7280]" />
+                  )}
                   <span>Button</span>
-                </div>
-                <div className="pl-4 pr-2 py-0.5 flex items-center gap-1.5 text-[#9CA3AF]">
-                  <ChevronDown className="w-3 h-3 text-[#6B7280]" />
-                  <span>Transformations</span>
-                </div>
-                <div className="pl-7 pr-2 py-0.5 flex items-center gap-1.5 text-[#9CA3AF]">
-                  <ChevronDown className="w-3 h-3 text-[#6B7280]" />
-                  <span>Position</span>
-                </div>
-                {tracks
-                  .filter((t) => t.group === 'Position')
-                  .map((t) => (
-                    <div
-                      key={t.id}
-                      className="pl-11 h-[20px] flex items-center text-[#9CA3AF] hover:bg-[#1E2129]"
-                    >
-                      {t.label}
+                </button>
+                {!collapsedGroups.Button && (
+                  <>
+                    <div className="pl-4 pr-2 py-0.5 flex items-center gap-1.5 text-[#9CA3AF]">
+                      <ChevronDown className="w-3 h-3 text-[#6B7280]" />
+                      <span>Transformations</span>
                     </div>
-                  ))}
-                <div className="pl-7 pr-2 py-0.5 flex items-center gap-1.5 text-[#9CA3AF]">
-                  <ChevronDown className="w-3 h-3 text-[#6B7280]" />
-                  <span>Rotation</span>
-                </div>
-                {tracks
-                  .filter((t) => t.group === 'Rotation')
-                  .map((t) => (
-                    <div
-                      key={t.id}
-                      className="pl-11 h-[20px] flex items-center text-[#9CA3AF] hover:bg-[#1E2129]"
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCollapsedGroups((p) => ({ ...p, Position: !p.Position }))
+                      }
+                      className="w-full pl-7 pr-2 py-0.5 flex items-center gap-1.5 text-[#9CA3AF] hover:bg-[#1E2129] cursor-pointer"
                     >
-                      {t.label}
-                    </div>
-                  ))}
+                      {collapsedGroups.Position ? (
+                        <ChevronRight className="w-3 h-3 text-[#6B7280]" />
+                      ) : (
+                        <ChevronDown className="w-3 h-3 text-[#6B7280]" />
+                      )}
+                      <span>Position</span>
+                    </button>
+                    {!collapsedGroups.Position &&
+                      tracks
+                        .filter((t) => t.group === 'Position')
+                        .map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() =>
+                              onUpdateEasing({
+                                targetLabel: `BUTTON > POSITION > ${t.label.toUpperCase()}`,
+                              })
+                            }
+                            className="w-full pl-11 h-[20px] flex items-center text-[#9CA3AF] hover:bg-[#1E2129] hover:text-white cursor-pointer"
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCollapsedGroups((p) => ({ ...p, Rotation: !p.Rotation }))
+                      }
+                      className="w-full pl-7 pr-2 py-0.5 flex items-center gap-1.5 text-[#9CA3AF] hover:bg-[#1E2129] cursor-pointer"
+                    >
+                      {collapsedGroups.Rotation ? (
+                        <ChevronRight className="w-3 h-3 text-[#6B7280]" />
+                      ) : (
+                        <ChevronDown className="w-3 h-3 text-[#6B7280]" />
+                      )}
+                      <span>Rotation</span>
+                    </button>
+                    {!collapsedGroups.Rotation &&
+                      tracks
+                        .filter((t) => t.group === 'Rotation')
+                        .map((t) => (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() =>
+                              onUpdateEasing({
+                                targetLabel: `BUTTON > ROTATION > ${t.label.toUpperCase()}`,
+                              })
+                            }
+                            className="w-full pl-11 h-[20px] flex items-center text-[#9CA3AF] hover:bg-[#1E2129] hover:text-white cursor-pointer"
+                          >
+                            {t.label}
+                          </button>
+                        ))}
+                  </>
+                )}
               </div>
 
               <div
+                onPointerMove={(e) => {
+                  if (!draggingTrack) return;
+                  const deltaMs = Math.round(
+                    ((e.clientX - draggingTrack.startClientX) /
+                      Math.max(120, draggingTrack.laneWidth)) *
+                      (3200 / timelineZoom)
+                  );
+                  const span = draggingTrack.origEnd - draggingTrack.origStart;
+                  const nextStart = Math.max(0, draggingTrack.origStart + deltaMs);
+                  onUpdateTrack(draggingTrack.id, {
+                    startMs: nextStart,
+                    endMs: nextStart + span,
+                  });
+                }}
+                onPointerUp={() => setDraggingTrack(null)}
                 onClick={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect();
                   const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
@@ -746,63 +1022,97 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
                   </div>
                 </div>
 
-                <div className="pt-[64px]">
-                  {tracks
-                    .filter((t) => t.group === 'Position')
-                    .map((track) => (
-                      <div key={track.id} className="h-[20px] relative flex items-center">
-                        <div className="w-full h-[1px] bg-[#1E222B]" />
-                        <div
-                          style={{
-                            left: `${(track.startMs / 3200) * timelineZoom * 100}%`,
-                            width: `${((track.endMs - track.startMs) / 3200) * timelineZoom * 100}%`,
-                            backgroundColor: track.color,
-                          }}
-                          className="absolute h-[5px] rounded-[1px] flex items-center justify-between"
-                        >
-                          <span
-                            className="w-2 h-2 rotate-45 -ml-1"
-                            style={{ backgroundColor: track.color }}
-                          />
-                          <span
-                            className="w-2 h-2 rotate-45 -mr-1"
-                            style={{ backgroundColor: track.color }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  <div className="h-[22px]" />
-                  {tracks
-                    .filter((t) => t.group === 'Rotation')
-                    .map((track) => (
-                      <div key={track.id} className="h-[20px] relative flex items-center">
-                        <div className="w-full h-[1px] bg-[#1E222B]" />
-                        <div
-                          style={{
-                            left: `${(track.startMs / 3200) * timelineZoom * 100}%`,
-                            width: `${((track.endMs - track.startMs) / 3200) * timelineZoom * 100}%`,
-                            backgroundColor: track.color,
-                          }}
-                          className="absolute h-[5px] rounded-[1px] flex items-center justify-between"
-                        >
-                          <span
-                            className="w-2 h-2 rotate-45 -ml-1"
-                            style={{ backgroundColor: track.color }}
-                          />
-                          <span
-                            className="w-2 h-2 rotate-45 -mr-1"
-                            style={{ backgroundColor: track.color }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                </div>
+                {!collapsedGroups.Button && (
+                  <div className="pt-[64px]">
+                    {!collapsedGroups.Position &&
+                      tracks
+                        .filter((t) => t.group === 'Position')
+                        .map((track) => (
+                          <div key={track.id} className="h-[20px] relative flex items-center">
+                            <div className="w-full h-[1px] bg-[#1E222B]" />
+                            <div
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                const lane = e.currentTarget.parentElement?.getBoundingClientRect();
+                                setDraggingTrack({
+                                  id: track.id,
+                                  startClientX: e.clientX,
+                                  origStart: track.startMs,
+                                  origEnd: track.endMs,
+                                  laneWidth: lane?.width || 400,
+                                });
+                                onUpdateEasing({
+                                  targetLabel: `BUTTON > POSITION > ${track.label.toUpperCase()}`,
+                                });
+                              }}
+                              style={{
+                                left: `${(track.startMs / 3200) * timelineZoom * 100}%`,
+                                width: `${((track.endMs - track.startMs) / 3200) * timelineZoom * 100}%`,
+                                backgroundColor: track.color,
+                              }}
+                              className="absolute h-[5px] rounded-[1px] flex items-center justify-between cursor-ew-resize"
+                              title={`Drag to move ${track.group} ${track.label} (${track.startMs}ms - ${track.endMs}ms)`}
+                            >
+                              <span
+                                className="w-2 h-2 rotate-45 -ml-1"
+                                style={{ backgroundColor: track.color }}
+                              />
+                              <span
+                                className="w-2 h-2 rotate-45 -mr-1"
+                                style={{ backgroundColor: track.color }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                    <div className="h-[22px]" />
+                    {!collapsedGroups.Rotation &&
+                      tracks
+                        .filter((t) => t.group === 'Rotation')
+                        .map((track) => (
+                          <div key={track.id} className="h-[20px] relative flex items-center">
+                            <div className="w-full h-[1px] bg-[#1E222B]" />
+                            <div
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                const lane = e.currentTarget.parentElement?.getBoundingClientRect();
+                                setDraggingTrack({
+                                  id: track.id,
+                                  startClientX: e.clientX,
+                                  origStart: track.startMs,
+                                  origEnd: track.endMs,
+                                  laneWidth: lane?.width || 400,
+                                });
+                                onUpdateEasing({
+                                  targetLabel: `BUTTON > ROTATION > ${track.label.toUpperCase()}`,
+                                });
+                              }}
+                              style={{
+                                left: `${(track.startMs / 3200) * timelineZoom * 100}%`,
+                                width: `${((track.endMs - track.startMs) / 3200) * timelineZoom * 100}%`,
+                                backgroundColor: track.color,
+                              }}
+                              className="absolute h-[5px] rounded-[1px] flex items-center justify-between cursor-ew-resize"
+                              title={`Drag to move ${track.group} ${track.label} (${track.startMs}ms - ${track.endMs}ms)`}
+                            >
+                              <span
+                                className="w-2 h-2 rotate-45 -ml-1"
+                                style={{ backgroundColor: track.color }}
+                              />
+                              <span
+                                className="w-2 h-2 rotate-45 -mr-1"
+                                style={{ backgroundColor: track.color }}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                  </div>
+                )}
               </div>
             </div>
 
             <div className="h-[22px] px-2.5 bg-[#15171C] border-t border-[#232730] flex items-center justify-between text-[9.5px] text-[#6B7280] shrink-0">
               <span>Range from 0 to {maxMs}</span>
-              <span className="font-mono-code">60 FPS</span>
+              <span className="font-mono-code">{timelineFps} FPS</span>
             </div>
           </div>
 
@@ -923,9 +1233,12 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
               { name: 'Gauge_Needle_Mask.png', kind: 'Texture', size: '240 KB' },
               { name: 'SairaSemiCondensed.ttf', kind: 'Font', size: '112 KB' },
             ].map((asset) => (
-              <div
+              <button
                 key={asset.name}
-                className="p-2.5 bg-[#1B1E25] border border-[#262B35] rounded-[3px] flex items-center gap-2.5 hover:border-[#24B0FF]/60 transition-colors"
+                type="button"
+                onClick={() => onUseAssetDatabaseItem(asset.name)}
+                className="p-2.5 bg-[#1B1E25] border border-[#262B35] rounded-[3px] flex items-center gap-2.5 hover:border-[#24B0FF]/80 text-left transition-colors cursor-pointer"
+                title={`Click to apply or insert ${asset.name}`}
               >
                 <FolderOpen className="w-4 h-4 text-[#24B0FF] shrink-0" />
                 <div className="min-w-0">
@@ -936,7 +1249,7 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
                     {asset.kind} · {asset.size}
                   </div>
                 </div>
-              </div>
+              </button>
             ))}
           </div>
         </div>

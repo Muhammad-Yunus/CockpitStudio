@@ -22,13 +22,17 @@ import {
   Monitor,
   Plus,
   Frame,
+  Sun,
 } from 'lucide-react';
-import { CONTEXT_MENU_ITEMS, PRIMITIVE_MENU_ITEMS } from '../data/defaultStudioState';
+import {
+  CONTEXT_MENU_ITEMS,
+  LIGHT_MENU_ITEMS,
+  PRIMITIVE_MENU_ITEMS,
+} from '../data/defaultStudioState';
 import type {
-  AttributesState,
   ConsoleLogEntry,
-  LeftBottomTab,
   LeftTopTab,
+  LightKind3D,
   ProjectNode,
   SceneNode,
 } from '../types/studio';
@@ -41,12 +45,15 @@ interface LeftOutlinerDockProps {
   onToggleNodeExpanded: (nodeId: string) => void;
   onToggleNodeVisibility: (nodeId: string) => void;
   onToggleNodeLock: (nodeId: string) => void;
+  onExpandAllSceneNodes: (expanded: boolean) => void;
   onSelectProjectNode: (nodeId: string) => void;
   onAddPrimitive: (primitive: (typeof PRIMITIVE_MENU_ITEMS)[number]) => void;
+  onAddLight: (lightKind: LightKind3D) => void;
   onCreateContextElement: (itemLabel: string) => void;
+  onDuplicateSelected: () => void;
+  onDeleteSelected: () => void;
+  onClearConsoleLogs: () => void;
   logs: ConsoleLogEntry[];
-  attributes: AttributesState;
-  onUpdateAttributes: (patch: Partial<AttributesState>) => void;
   showContextMenu: boolean;
   onToggleContextMenu: (open: boolean) => void;
 }
@@ -59,33 +66,50 @@ export const LeftOutlinerDock: React.FC<LeftOutlinerDockProps> = ({
   onToggleNodeExpanded,
   onToggleNodeVisibility,
   onToggleNodeLock,
+  onExpandAllSceneNodes,
   onSelectProjectNode,
   onAddPrimitive,
+  onAddLight,
   onCreateContextElement,
+  onDuplicateSelected,
+  onDeleteSelected,
+  onClearConsoleLogs,
   logs,
-  attributes,
-  onUpdateAttributes,
   showContextMenu,
   onToggleContextMenu,
 }) => {
   const [topTab, setTopTab] = useState<LeftTopTab>('Scene Outliner');
-  const [bottomTab, setBottomTab] = useState<LeftBottomTab>('Project Outliner');
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [projectSearchOpen, setProjectSearchOpen] = useState(false);
+  const [projectSearchQuery, setProjectSearchQuery] = useState('');
+  const [topMenuOpen, setTopMenuOpen] = useState(false);
+  const [bottomMenuOpen, setBottomMenuOpen] = useState(false);
   const [hoveredSubmenu, setHoveredSubmenu] = useState<string>('Primitives');
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
   const contextRef = useRef<HTMLDivElement>(null);
+  const topMenuRef = useRef<HTMLDivElement>(null);
+  const bottomMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!showContextMenu) return;
     const onDown = (e: MouseEvent) => {
-      if (contextRef.current && !contextRef.current.contains(e.target as Node)) {
+      if (showContextMenu && contextRef.current && !contextRef.current.contains(e.target as Node)) {
         onToggleContextMenu(false);
+      }
+      if (topMenuOpen && topMenuRef.current && !topMenuRef.current.contains(e.target as Node)) {
+        setTopMenuOpen(false);
+      }
+      if (
+        bottomMenuOpen &&
+        bottomMenuRef.current &&
+        !bottomMenuRef.current.contains(e.target as Node)
+      ) {
+        setBottomMenuOpen(false);
       }
     };
     window.addEventListener('mousedown', onDown);
     return () => window.removeEventListener('mousedown', onDown);
-  }, [showContextMenu, onToggleContextMenu]);
+  }, [showContextMenu, topMenuOpen, bottomMenuOpen, onToggleContextMenu]);
 
   const renderNodeIcon = (node: SceneNode) => {
     switch (node.type) {
@@ -97,6 +121,8 @@ export const LeftOutlinerDock: React.FC<LeftOutlinerDockProps> = ({
         return <Sparkles className="w-3 h-3 text-[#8E95A2] shrink-0" />;
       case 'mesh':
         return <Box className="w-3 h-3 text-[#24B0FF] shrink-0" />;
+      case 'light':
+        return <Sun className="w-3 h-3 text-[#F59E0B] shrink-0" />;
       case 'frame':
         return <Frame className="w-3 h-3 text-[#10B981] shrink-0" />;
       case 'shape':
@@ -230,11 +256,14 @@ export const LeftOutlinerDock: React.FC<LeftOutlinerDockProps> = ({
     <aside className="flex flex-col h-full bg-[#16181D] border-r border-[#232730] select-none relative">
       {/* TOP HALF: Scene Outliner | Console */}
       <div className="flex flex-col flex-1 min-h-0 border-b border-[#232730]">
-        <div className="h-[28px] px-2 bg-[#1A1D24] border-b border-[#232730] flex items-center justify-between shrink-0">
+        <div className="h-[28px] px-2 bg-[#1A1D24] border-b border-[#232730] flex items-center justify-between shrink-0 relative">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
-              onClick={() => setSearchOpen(!searchOpen)}
+              onClick={() => {
+                setTopTab('Scene Outliner');
+                setSearchOpen(!searchOpen);
+              }}
               className={`hover:text-white transition-colors cursor-pointer ${
                 searchOpen ? 'text-[#24B0FF]' : 'text-[#8E95A2]'
               }`}
@@ -262,23 +291,82 @@ export const LeftOutlinerDock: React.FC<LeftOutlinerDockProps> = ({
             </button>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div ref={topMenuRef} className="flex items-center gap-1.5 relative">
             <button
               type="button"
               onClick={() => onToggleContextMenu(!showContextMenu)}
               className="text-[#8E95A2] hover:text-white cursor-pointer"
-              title="Create Scene Object"
+              title="Create Scene Object / Element"
             >
               <Plus className="w-3.5 h-3.5" />
             </button>
             <button
               type="button"
-              onClick={() => onToggleContextMenu(!showContextMenu)}
-              className="text-[#6B7280] hover:text-white cursor-pointer"
-              title="Outliner Menu"
+              onClick={() => setTopMenuOpen((o) => !o)}
+              className={`hover:text-white cursor-pointer ${
+                topMenuOpen ? 'text-[#24B0FF]' : 'text-[#6B7280]'
+              }`}
+              title="Scene Outliner & Console Actions"
             >
               <Menu className="w-3 h-3" />
             </button>
+
+            {topMenuOpen && (
+              <div className="absolute right-0 top-full mt-1 w-48 bg-[#1C1F26] border border-[#2C313D] rounded-[3px] shadow-2xl py-1 z-50 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onExpandAllSceneNodes(true);
+                    setTopMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Expand All Nodes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onExpandAllSceneNodes(false);
+                    setTopMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Collapse All Nodes
+                </button>
+                <div className="my-1 border-t border-[#262A34]" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDuplicateSelected();
+                    setTopMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Duplicate Selected
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onDeleteSelected();
+                    setTopMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#EF4444] hover:bg-[#262B36] cursor-pointer"
+                >
+                  Delete Selected
+                </button>
+                <div className="my-1 border-t border-[#262A34]" />
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClearConsoleLogs();
+                    setTopMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Clear Console Output
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -299,175 +387,166 @@ export const LeftOutlinerDock: React.FC<LeftOutlinerDockProps> = ({
             renderSceneTree(sceneTree)
           ) : (
             <div className="p-2 space-y-2 font-mono-code text-[10px] leading-relaxed">
-              {logs.map((entry) => (
-                <div
-                  key={entry.id}
-                  className={
-                    entry.level === 'error'
-                      ? 'text-[#E05D56]'
-                      : entry.level === 'ingest'
-                      ? 'text-[#24B0FF]'
-                      : 'text-[#39B97A]'
-                  }
-                >
-                  <div>
-                    [{entry.timestamp}] {entry.message}
+              {logs.length === 0 ? (
+                <div className="text-[#6B7280]">Console buffer cleared.</div>
+              ) : (
+                logs.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className={
+                      entry.level === 'error'
+                        ? 'text-[#E05D56]'
+                        : entry.level === 'ingest'
+                        ? 'text-[#24B0FF]'
+                        : 'text-[#39B97A]'
+                    }
+                  >
+                    <div>
+                      [{entry.timestamp}] {entry.message}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           )}
         </div>
       </div>
 
-      {/* BOTTOM HALF: Project Outliner | Material editor */}
+      {/* BOTTOM HALF: Project Outliner */}
       <div className="flex flex-col flex-1 min-h-0">
-        <div className="h-[28px] px-2 bg-[#1A1D24] border-b border-[#232730] flex items-center justify-between shrink-0">
+        <div className="h-[28px] px-2 bg-[#1A1D24] border-b border-[#232730] flex items-center justify-between shrink-0 relative">
           <div className="flex items-center gap-3 min-w-0">
-            <Search className="w-3 h-3 text-[#8E95A2] shrink-0" />
             <button
               type="button"
-              onClick={() => setBottomTab('Project Outliner')}
-              className={`text-[11px] font-medium whitespace-nowrap cursor-pointer ${
-                bottomTab === 'Project Outliner'
-                  ? 'text-[#E5E7EB]'
-                  : 'text-[#6B7280] hover:text-[#9CA3AF]'
+              onClick={() => setProjectSearchOpen((s) => !s)}
+              className={`hover:text-white transition-colors cursor-pointer shrink-0 ${
+                projectSearchOpen ? 'text-[#24B0FF]' : 'text-[#8E95A2]'
               }`}
+              title="Search Project Screens"
             >
+              <Search className="w-3 h-3" />
+            </button>
+            <span className="text-[11px] font-medium whitespace-nowrap text-[#E5E7EB]">
               Project Outliner
-            </button>
+            </span>
+          </div>
+          <div ref={bottomMenuRef} className="relative">
             <button
               type="button"
-              onClick={() => setBottomTab('Material editor')}
-              className={`text-[11px] font-medium whitespace-nowrap cursor-pointer ${
-                bottomTab === 'Material editor'
-                  ? 'text-[#E5E7EB]'
-                  : 'text-[#6B7280] hover:text-[#9CA3AF]'
+              onClick={() => setBottomMenuOpen((o) => !o)}
+              className={`hover:text-white cursor-pointer shrink-0 ${
+                bottomMenuOpen ? 'text-[#24B0FF]' : 'text-[#6B7280]'
               }`}
+              title="Project Outliner Options"
             >
-              Material editor
+              <Menu className="w-3 h-3" />
             </button>
+            {bottomMenuOpen && (
+              <div className="absolute right-0 top-full mt-1 w-48 bg-[#1C1F26] border border-[#2C313D] rounded-[3px] shadow-2xl py-1 z-50 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCollapsedCategories({});
+                    setBottomMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Expand All Categories
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCollapsedCategories({
+                      Unassigned: true,
+                      Cluster: true,
+                      Infotainment: true,
+                    });
+                    setBottomMenuOpen(false);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-[#D1D5DB] hover:bg-[#262B36] hover:text-white cursor-pointer"
+                >
+                  Collapse All Categories
+                </button>
+              </div>
+            )}
           </div>
-          <Menu className="w-3 h-3 text-[#6B7280] shrink-0" />
         </div>
 
-        <div className="flex-1 overflow-y-auto studio-scroll py-1.5">
-          {bottomTab === 'Project Outliner' ? (
-            <div className="space-y-1">
-              {categories.map((cat) => {
-                const isCollapsed = collapsedCategories[cat];
-                const items = projectTree.filter((p) => p.category === cat);
-                return (
-                  <div key={cat}>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setCollapsedCategories((prev) => ({ ...prev, [cat]: !prev[cat] }))
-                      }
-                      className="w-full px-2 h-[22px] flex items-center gap-1.5 text-[11px] text-[#E5E7EB] font-medium hover:bg-[#1E2129] cursor-pointer"
-                    >
-                      {isCollapsed ? (
-                        <ChevronRight className="w-3 h-3 text-[#6B7280]" />
-                      ) : (
-                        <ChevronDown className="w-3 h-3 text-[#6B7280]" />
-                      )}
-                      <span className="w-3 h-3 border border-[#4B5563] rounded-[2px] inline-block" />
-                      <span>{cat}</span>
-                    </button>
+        {projectSearchOpen && (
+          <div className="px-2 py-1 bg-[#13151A] border-b border-[#232730]">
+            <input
+              type="text"
+              value={projectSearchQuery}
+              onChange={(e) => setProjectSearchQuery(e.target.value)}
+              placeholder="Filter screens..."
+              className="w-full bg-[#1C1F26] border border-[#2C313D] rounded-[2px] px-2 py-0.5 text-[11px] text-[#E5E7EB] placeholder-[#6B7280] focus:outline-none focus:border-[#24B0FF]"
+            />
+          </div>
+        )}
 
-                    {!isCollapsed && (
-                      <div className="mt-0.5 space-y-0.5">
-                        {items.map((item) => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => onSelectProjectNode(item.id)}
-                            className={`w-full h-[22px] pl-6 pr-2.5 flex items-center justify-between text-[11px] transition-colors cursor-pointer ${
-                              item.active
-                                ? 'bg-[#222630] text-white'
-                                : 'text-[#9CA3AF] hover:bg-[#1E2129] hover:text-[#E5E7EB]'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2 truncate">
-                              {renderProjectIcon(item.icon)}
-                              <span className="truncate">{item.name}</span>
-                            </div>
-                            {item.category === 'Infotainment' && (
-                              <span
-                                className={`w-2.5 h-2.5 rounded-full border shrink-0 ${
-                                  item.active
-                                    ? 'border-[#10B981] bg-[#10B981]/25 ring-2 ring-[#10B981]/30'
-                                    : 'border-[#4B5563]'
-                                }`}
-                              />
-                            )}
-                          </button>
-                        ))}
-                      </div>
+        <div className="flex-1 overflow-y-auto studio-scroll py-1.5">
+          <div className="space-y-1">
+            {categories.map((cat) => {
+              const isCollapsed = collapsedCategories[cat];
+              const items = projectTree.filter(
+                (p) =>
+                  p.category === cat &&
+                  (!projectSearchQuery ||
+                    p.name.toLowerCase().includes(projectSearchQuery.toLowerCase()))
+              );
+              if (projectSearchQuery && items.length === 0) return null;
+              return (
+                <div key={cat}>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCollapsedCategories((prev) => ({ ...prev, [cat]: !prev[cat] }))
+                    }
+                    className="w-full px-2 h-[22px] flex items-center gap-1.5 text-[11px] text-[#E5E7EB] font-medium hover:bg-[#1E2129] cursor-pointer"
+                  >
+                    {isCollapsed ? (
+                      <ChevronRight className="w-3 h-3 text-[#6B7280]" />
+                    ) : (
+                      <ChevronDown className="w-3 h-3 text-[#6B7280]" />
                     )}
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="p-3 space-y-3 text-[11px]">
-              <div className="text-[10px] uppercase tracking-wider text-[#6E7480]">
-                PBR Surface Material
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[#9CA3AF]">Albedo Color</span>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    value={attributes.materialColor}
-                    onChange={(e) => onUpdateAttributes({ materialColor: e.target.value })}
-                    className="w-5 h-5 bg-transparent border-0 cursor-pointer"
-                  />
-                  <span className="font-mono-code text-[10px] text-[#D1D5DB]">
-                    {attributes.materialColor.toUpperCase()}
-                  </span>
+                    <span className="w-3 h-3 border border-[#4B5563] rounded-[2px] inline-block" />
+                    <span>{cat}</span>
+                  </button>
+
+                  {!isCollapsed && (
+                    <div className="mt-0.5 space-y-0.5">
+                      {items.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => onSelectProjectNode(item.id)}
+                          className={`w-full h-[22px] pl-6 pr-2.5 flex items-center justify-between text-[11px] transition-colors cursor-pointer ${
+                            item.active
+                              ? 'bg-[#222630] text-white'
+                              : 'text-[#9CA3AF] hover:bg-[#1E2129] hover:text-[#E5E7EB]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 truncate">
+                            {renderProjectIcon(item.icon)}
+                            <span className="truncate">{item.name}</span>
+                          </div>
+                          {item.category === 'Infotainment' && (
+                            <span
+                              className={`w-2.5 h-2.5 rounded-full border shrink-0 ${
+                                item.active
+                                  ? 'border-[#10B981] bg-[#10B981]/25 ring-2 ring-[#10B981]/30'
+                                  : 'border-[#4B5563]'
+                              }`}
+                            />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div className="space-y-1">
-                <div className="flex justify-between text-[#9CA3AF]">
-                  <span>Metalness</span>
-                  <span className="font-mono-code tabular-nums text-[#D1D5DB]">
-                    {attributes.materialMetalness.toFixed(2)}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={attributes.materialMetalness}
-                  onChange={(e) =>
-                    onUpdateAttributes({ materialMetalness: parseFloat(e.target.value) })
-                  }
-                  className="w-full accent-[#24B0FF]"
-                />
-              </div>
-              <div className="space-y-1">
-                <div className="flex justify-between text-[#9CA3AF]">
-                  <span>Roughness</span>
-                  <span className="font-mono-code tabular-nums text-[#D1D5DB]">
-                    {attributes.materialRoughness.toFixed(2)}
-                  </span>
-                </div>
-                <input
-                  type="range"
-                  min={0.05}
-                  max={1}
-                  step={0.05}
-                  value={attributes.materialRoughness}
-                  onChange={(e) =>
-                    onUpdateAttributes({ materialRoughness: parseFloat(e.target.value) })
-                  }
-                  className="w-full accent-[#24B0FF]"
-                />
-              </div>
-            </div>
-          )}
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -503,6 +582,25 @@ export const LeftOutlinerDock: React.FC<LeftOutlinerDockProps> = ({
               </div>
             ))}
           </div>
+
+          {hoveredSubmenu === 'Light' && (
+            <div className="ml-0.5 mt-[2px] w-[144px] bg-[#1C1F26] border border-[#2C313D] rounded-[3px] shadow-2xl py-1">
+              {LIGHT_MENU_ITEMS.map((light) => (
+                <button
+                  key={light}
+                  type="button"
+                  onClick={() => {
+                    onAddLight(light);
+                    onToggleContextMenu(false);
+                  }}
+                  className="w-full px-3 py-1 text-left text-[11px] text-[#C2C7D0] hover:bg-[#2A2E39] hover:text-white flex items-center gap-2 cursor-pointer"
+                >
+                  <Sun className="w-3 h-3 text-[#F59E0B]" />
+                  <span>{light}</span>
+                </button>
+              ))}
+            </div>
+          )}
 
           {hoveredSubmenu === 'Primitives' && (
             <div className="ml-0.5 mt-[26px] w-[132px] bg-[#1C1F26] border border-[#2C313D] rounded-[3px] shadow-2xl py-1">

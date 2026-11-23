@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type {
   BottomPanelMode,
+  HmiLayer,
   MobilePane,
   StudioUser,
   ViewportTab,
@@ -25,6 +26,8 @@ interface TopStudioBarProps {
   onSelectViewportTab: (tab: ViewportTab) => void;
   bottomPanelMode: BottomPanelMode;
   onSelectBottomPanelMode: (mode: BottomPanelMode) => void;
+  isBottomCollapsed: boolean;
+  onToggleBottomCollapsed: () => void;
   isSimulating: boolean;
   onToggleSimulation: () => void;
   onStopSimulation: () => void;
@@ -33,9 +36,12 @@ interface TopStudioBarProps {
   projectName: string;
   isSavingProject: boolean;
   onSaveProject: () => void;
+  onExportHtml: () => void;
+  onDuplicateSelected: () => void;
+  onDeleteSelected: () => void;
+  onCreateQuickLayer: (kind: HmiLayer['kind']) => void;
+  onResetWorkspace: () => void;
   onOpenAuthIngestModal: (initialTab?: 'auth' | 'projects' | 'ingest') => void;
-  isFramedWindow: boolean;
-  onToggleFramedWindow: () => void;
   mobilePane: MobilePane;
   onSelectMobilePane: (pane: MobilePane) => void;
 }
@@ -45,6 +51,8 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
   onSelectViewportTab,
   bottomPanelMode,
   onSelectBottomPanelMode,
+  isBottomCollapsed,
+  onToggleBottomCollapsed,
   isSimulating,
   onToggleSimulation,
   onStopSimulation,
@@ -53,14 +61,26 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
   projectName,
   isSavingProject,
   onSaveProject,
+  onExportHtml,
+  onDuplicateSelected,
+  onDeleteSelected,
+  onCreateQuickLayer,
+  onResetWorkspace,
   onOpenAuthIngestModal,
-  isFramedWindow,
-  onToggleFramedWindow,
   mobilePane,
   onSelectMobilePane,
 }) => {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const toggleFullscreen = () => {
+    if (typeof document === 'undefined') return;
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  };
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -83,28 +103,54 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
         action: () => onSaveProject(),
       },
       {
+        label: 'Export HMI Bundle (.html)',
+        action: () => onExportHtml(),
+      },
+      {
         label: 'Projects & Cloud Workspace',
         action: () => onOpenAuthIngestModal('projects'),
+        divider: true,
       },
       {
         label: 'Account & Session',
         action: () => onOpenAuthIngestModal('auth'),
+      },
+      {
+        label: 'Reset Workspace Defaults',
+        action: () => onResetWorkspace(),
         divider: true,
       },
     ],
     Edit: [
       {
-        label: 'Trigger Logic Step (ArrowDown)',
+        label: 'Duplicate Selected Layer',
+        shortcut: 'Ctrl+D',
+        action: () => onDuplicateSelected(),
+      },
+      {
+        label: 'Delete Selected Element',
+        shortcut: 'Del',
+        action: () => onDeleteSelected(),
+      },
+      {
+        label: 'Add HMI Group Frame',
+        shortcut: 'Ctrl+G',
+        action: () => onCreateQuickLayer('frame'),
+        divider: true,
+      },
+      {
+        label: 'Add Panel Widget',
+        action: () => onCreateQuickLayer('rectangle'),
+      },
+      {
+        label: 'Add Text Label',
+        action: () => onCreateQuickLayer('text'),
+      },
+      {
+        label: 'Trigger Logic Step',
         shortcut: '↓',
         action: () => onTriggerLogicStep(),
-      },
-      {
-        label: 'Switch to Logic Editor',
-        action: () => onSelectBottomPanelMode('Logic Editor'),
-      },
-      {
-        label: 'Switch to Transition Editor',
-        action: () => onSelectBottomPanelMode('Transition Editor'),
+        divider: true,
       },
     ],
     View: [
@@ -121,9 +167,22 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
         action: () => onSelectViewportTab('Root'),
       },
       {
-        label: isFramedWindow ? 'Expand Fullscreen IDE' : 'Framed Studio Backdrop',
-        action: () => onToggleFramedWindow(),
+        label: 'Logic Editor Workbench',
+        action: () => onSelectBottomPanelMode('Logic Editor'),
         divider: true,
+      },
+      {
+        label: 'Transition Editor Timeline',
+        action: () => onSelectBottomPanelMode('Transition Editor'),
+      },
+      {
+        label: isBottomCollapsed ? 'Restore Bottom Workbench' : 'Minimize Bottom Workbench',
+        action: () => onToggleBottomCollapsed(),
+        divider: true,
+      },
+      {
+        label: 'Toggle Fullscreen',
+        action: () => toggleFullscreen(),
       },
     ],
     Project: [
@@ -138,6 +197,7 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
       {
         label: 'Asset Database',
         action: () => onSelectBottomPanelMode('Asset Database'),
+        divider: true,
       },
     ],
     Simulation: [
@@ -152,6 +212,7 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
       },
       {
         label: 'Execute Node Graph Step',
+        shortcut: '↓',
         action: () => onTriggerLogicStep(),
       },
     ],
@@ -159,6 +220,14 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
       {
         label: 'Zod Ingest Schema & Docs',
         action: () => onOpenAuthIngestModal('ingest'),
+      },
+      {
+        label: 'Reset Layout & Exit Fullscreen',
+        action: () => {
+          if (isBottomCollapsed) onToggleBottomCollapsed();
+          if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+        },
+        divider: true,
       },
     ],
   };
@@ -182,7 +251,7 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
             onClick={onSaveProject}
             disabled={isSavingProject}
             className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-medium text-[#9CA3AF] hover:text-white bg-[#1B1E25] hover:bg-[#242833] border border-[#282D38] rounded-[3px] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-            title="Save workspace to PostgreSQL"
+            title="Save workspace to PostgreSQL (Ctrl+S)"
           >
             <Save className="w-3 h-3 text-[#24B0FF]" />
             <span>{isSavingProject ? 'Saving...' : 'Save'}</span>
@@ -213,27 +282,36 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
           <div className="hidden md:flex items-center gap-2.5 ml-2 text-[#6B7280]">
             <button
               type="button"
-              onClick={onToggleFramedWindow}
-              className="hover:text-[#D1D5DB] transition-colors cursor-pointer"
-              title="Minimize / Frame view"
-              aria-label="Minimize window frame"
+              onClick={onToggleBottomCollapsed}
+              className={`hover:text-[#D1D5DB] transition-colors cursor-pointer ${
+                isBottomCollapsed ? 'text-[#24B0FF]' : ''
+              }`}
+              title={
+                isBottomCollapsed ? 'Restore Bottom Workbench' : 'Minimize Bottom Workbench'
+              }
+              aria-label="Toggle bottom workbench"
             >
               <Minus className="w-3 h-3" />
             </button>
             <button
               type="button"
-              onClick={onToggleFramedWindow}
+              onClick={toggleFullscreen}
               className="hover:text-[#D1D5DB] transition-colors cursor-pointer"
-              title="Toggle fullscreen frame"
-              aria-label="Maximize window frame"
+              title="Toggle Fullscreen"
+              aria-label="Toggle fullscreen"
             >
               <Square className="w-2.5 h-2.5" />
             </button>
             <button
               type="button"
-              onClick={onStopSimulation}
+              onClick={() => {
+                onStopSimulation();
+                if (document.fullscreenElement) {
+                  document.exitFullscreen?.().catch(() => {});
+                }
+              }}
               className="hover:text-[#EF4444] transition-colors cursor-pointer"
-              title="Reset simulation"
+              title="Stop Simulation & Reset Playhead"
               aria-label="Reset simulation"
             >
               <X className="w-3 h-3" />
@@ -263,7 +341,7 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
                 {menuName}
               </button>
               {openMenu === menuName && (
-                <div className="absolute left-0 top-full mt-0.5 w-60 bg-[#1B1E25] border border-[#2C313D] rounded-[3px] shadow-2xl py-1 z-50">
+                <div className="absolute left-0 top-full mt-0.5 w-64 bg-[#1B1E25] border border-[#2C313D] rounded-[3px] shadow-2xl py-1 z-50">
                   {menus[menuName].map((item) => (
                     <React.Fragment key={item.label}>
                       {item.divider && <div className="my-1 border-t border-[#262A34]" />}
@@ -290,7 +368,7 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
           ))}
         </nav>
 
-        {/* Center 5-Icon Playback / Preview Bar (exact match to screenshots 2 & 3) */}
+        {/* Center 5-Icon Playback / Preview Bar */}
         <div className="hidden sm:flex items-center gap-3 text-[#8E95A2]">
           <button
             type="button"
@@ -308,7 +386,7 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
             type="button"
             onClick={onTriggerLogicStep}
             className="p-1 rounded-[2px] hover:text-white transition-colors cursor-pointer"
-            title="Step Logic Node Graph"
+            title="Step Logic Node Graph (ArrowDown)"
           >
             <SlidersHorizontal className="w-3.5 h-3.5" />
           </button>
@@ -318,7 +396,7 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
             className={`p-1 rounded-[2px] transition-colors cursor-pointer ${
               isSimulating ? 'text-[#10B981]' : 'hover:text-white'
             }`}
-            title={isSimulating ? 'Pause Simulation' : 'Play Simulation'}
+            title={isSimulating ? 'Pause Simulation (Space)' : 'Play Simulation (Space)'}
           >
             <Play className="w-3.5 h-3.5" />
           </button>
@@ -356,6 +434,7 @@ export const TopStudioBar: React.FC<TopStudioBarProps> = ({
               )
             }
             className="hover:text-[#D1D5DB] transition-colors whitespace-nowrap cursor-pointer"
+            title="Cycle Bottom Panel Mode"
           >
             {bottomPanelMode}
           </button>

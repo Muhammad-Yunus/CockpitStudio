@@ -2,23 +2,43 @@ export type ViewportTab = 'Root' | 'Cluster' | 'Infotainment';
 export type BottomPanelMode = 'Logic Editor' | 'Transition Editor' | 'Asset Database';
 export type RightBottomTab = 'Asset manager' | 'Code Editor' | 'Console';
 export type LeftTopTab = 'Scene Outliner' | 'Console';
-export type LeftBottomTab = 'Project Outliner' | 'Material editor';
+export type LeftBottomTab = 'Project Outliner';
 export type MobilePane = 'canvas' | 'outliner' | 'inspector' | 'logic' | 'api';
 export type CanvasDrawTool = 'select' | 'frame' | 'vector' | 'rectangle' | 'pen' | 'text';
 export type TransformMode3D = 'translate' | 'rotate' | 'scale' | 'off';
 export type CameraPreset3D = 'perspective' | 'top' | 'front' | 'side';
 export type LightingPreset3D = 'studio' | 'contrast' | 'night';
+export type LightKind3D = 'Directional Light' | 'Point Light' | 'Rim Light';
+
+export interface AddedLight3D {
+  id: string;
+  kind: LightKind3D;
+  color: string;
+  intensity: number;
+}
 
 export interface SceneNode {
   id: string;
   name: string;
-  type: 'text' | 'folder' | 'clock' | 'shape' | 'blur' | 'mask' | 'prefab' | 'instance' | 'mesh' | 'frame';
+  type:
+    | 'text'
+    | 'folder'
+    | 'clock'
+    | 'shape'
+    | 'blur'
+    | 'mask'
+    | 'prefab'
+    | 'instance'
+    | 'mesh'
+    | 'frame'
+    | 'light';
   expanded?: boolean;
   locked?: boolean;
   visible?: boolean;
   muted?: boolean;
   children?: SceneNode[];
   primitiveKind?: 'Cube' | 'Cylinder' | 'Dome' | 'Plane' | 'Sphere' | 'Spring' | 'Torus';
+  lightKind?: LightKind3D;
   layerId?: string;
 }
 
@@ -44,13 +64,20 @@ export interface HmiLayer {
   zOrder: number;
   fillColor: string;
   fillOpacity: number;
+  fillBlend?: string;
   fillVisible: boolean;
   strokeColor: string;
   strokeWidth: number;
+  strokeOpacity?: number;
+  strokeBlend?: string;
+  strokeVisible?: boolean;
   strokeAlign: 'Inside' | 'Center' | 'Outside';
   tintColor: string;
+  tintVisible?: boolean;
   shadowColor: string;
+  shadowVisible?: boolean;
   backgroundBlur: number;
+  blurVisible?: boolean;
   text: string;
   fontFamily: string;
   fontWeight: string;
@@ -71,10 +98,15 @@ export interface BuiltInWidgetOverride {
   fillColor?: string;
   strokeColor?: string;
   strokeWidth?: number;
+  strokeVisible?: boolean;
   fontSize?: number;
   fontFamily?: string;
+  letterSpacing?: number;
   cornerRadius?: number;
   rotation?: number;
+  textContent?: string;
+  shadowColor?: string;
+  shadowVisible?: boolean;
   visible: boolean;
   locked: boolean;
 }
@@ -127,6 +159,7 @@ export interface AttributesState {
   strokeBlend: string;
   strokeAlign: 'Inside' | 'Center' | 'Outside';
   strokeWidth: number;
+  strokeVisible: boolean;
   tintColor: string;
   tintVisible: boolean;
   shadowColor: string;

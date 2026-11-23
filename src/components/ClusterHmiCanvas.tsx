@@ -38,6 +38,7 @@ interface ClusterHmiCanvasProps {
   onDeleteLayer: (layerId: string) => void;
   widgetOverrides: Record<string, BuiltInWidgetOverride>;
   onUpdateWidgetOverride: (widgetId: string, patch: Partial<BuiltInWidgetOverride>) => void;
+  onChangeGear: (gear: TelemetrySnapshot['gear']) => void;
   activeDrawTool: CanvasDrawTool;
   onChangeDrawTool: (tool: CanvasDrawTool) => void;
   isSimulating: boolean;
@@ -70,6 +71,7 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
   onDeleteLayer,
   widgetOverrides,
   onUpdateWidgetOverride,
+  onChangeGear,
   activeDrawTool,
   onChangeDrawTool,
   isSimulating,
@@ -79,6 +81,7 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
   const artboardRef = useRef<HTMLDivElement>(null);
   const [showGuides, setShowGuides] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
+  const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const simRef = useRef(isSimulating);
   const speedRef = useRef(telemetry.speedKmh);
 
@@ -703,14 +706,20 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
                 >
                   <div className="flex items-center gap-2.5 text-[11px] font-medium tracking-wider mb-3">
                     {gears.map((g) => (
-                      <span
+                      <button
                         key={g}
-                        className={
-                          telemetry.gear === g ? 'text-white font-semibold' : 'text-[#5C6678]'
-                        }
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={() => onChangeGear(g)}
+                        className={`cursor-pointer transition-colors ${
+                          telemetry.gear === g
+                            ? 'text-white font-semibold'
+                            : 'text-[#5C6678] hover:text-[#9CA3AF]'
+                        }`}
+                        title={`Set Gear ${g}`}
                       >
                         {g}
-                      </span>
+                      </button>
                     ))}
                   </div>
 
@@ -718,6 +727,7 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
                     style={{
                       color: speedOv?.fillColor || '#E5EAF2',
                       fontSize: speedOv?.fontSize ? `${Math.max(24, speedOv.fontSize * 3.5)}px` : undefined,
+                      letterSpacing: speedOv?.letterSpacing ? `${speedOv.letterSpacing * 0.4}px` : undefined,
                     }}
                     className="font-display text-[36px] sm:text-[50px] leading-none font-normal tabular-nums tracking-tight"
                   >
@@ -732,7 +742,7 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
                         : 'text-[#9CA3AF] border-[#4B5563]/50 bg-[#1F2937]/30'
                     }`}
                   >
-                    READY
+                    {speedOv?.textContent || 'READY'}
                   </div>
                 </div>
               ) : (
@@ -799,6 +809,7 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
                         rx={gaugeOv?.cornerRadius !== undefined ? Math.min(34, gaugeOv.cornerRadius / 3) : 14}
                         fill="none"
                         stroke={gaugeRingStroke}
+                        strokeOpacity={gaugeOv?.strokeVisible === false ? 0 : 1}
                         strokeWidth={gaugeOv?.strokeWidth ?? 2.5}
                         strokeDasharray="240"
                         strokeDashoffset={Math.max(
@@ -848,11 +859,23 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
             {hmiLayers.map((layer) => {
               if (!layer.visible) return null;
               const isSelected = selectedNodeId === layer.id;
+              const showStroke = layer.strokeVisible !== false && layer.strokeWidth > 0;
+              const shadowGlow =
+                layer.shadowVisible && layer.shadowColor
+                  ? `0 6px 18px ${layer.shadowColor}55`
+                  : undefined;
+              const selectionRing = isSelected ? '0 0 0 1px #24B0FF' : undefined;
+              const combinedShadow = [selectionRing, shadowGlow].filter(Boolean).join(', ') || undefined;
+
               return (
                 <div
                   key={layer.id}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    if (!layer.locked) setEditingLayerId(layer.id);
+                  }}
                   onPointerDown={(e) => {
-                    if (activeDrawTool !== 'select') return;
+                    if (activeDrawTool !== 'select' || editingLayerId === layer.id) return;
                     e.stopPropagation();
                     onSelectElement(layer.id, layer.name, layer.kind);
                     if (layer.locked) return;
@@ -883,29 +906,45 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
                           ? layer.fillColor
                           : 'transparent'
                         : 'transparent',
+                    mixBlendMode:
+                      layer.fillBlend === 'Multiply'
+                        ? 'multiply'
+                        : layer.fillBlend === 'Screen'
+                        ? 'screen'
+                        : undefined,
                     border:
-                      layer.kind === 'rectangle' || layer.kind === 'frame'
+                      (layer.kind === 'rectangle' || layer.kind === 'frame') && showStroke
                         ? `${layer.strokeWidth}px ${
                             layer.kind === 'frame' ? 'dashed' : 'solid'
                           } ${layer.strokeColor}`
                         : undefined,
                     backdropFilter:
-                      layer.backgroundBlur > 0
+                      layer.blurVisible !== false && layer.backgroundBlur > 0
                         ? `blur(${Math.min(24, layer.backgroundBlur / 10)}px)`
                         : undefined,
-                    boxShadow: isSelected ? '0 0 0 1px #24B0FF' : undefined,
+                    boxShadow: combinedShadow,
                   }}
                   className={`absolute flex items-center justify-center ${
                     layer.locked ? 'cursor-not-allowed' : 'cursor-move'
                   }`}
                 >
+                  {layer.tintVisible && (
+                    <div
+                      style={{
+                        backgroundColor: layer.tintColor,
+                        borderRadius: `${layer.cornerRadius}px`,
+                      }}
+                      className="pointer-events-none absolute inset-0 opacity-15"
+                    />
+                  )}
+
                   {layer.kind === 'vector' && (
                     <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="w-full h-full">
                       <polygon
                         points="50,6 94,92 6,92"
                         fill={layer.fillVisible ? layer.fillColor : 'none'}
                         fillOpacity={layer.fillOpacity / 100}
-                        stroke={layer.strokeColor}
+                        stroke={showStroke ? layer.strokeColor : 'none'}
                         strokeWidth={Math.max(1, layer.strokeWidth * 1.5)}
                       />
                     </svg>
@@ -916,7 +955,7 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
                       <path
                         d="M 6 50 Q 45 6, 114 14"
                         fill="none"
-                        stroke={layer.strokeColor}
+                        stroke={showStroke ? layer.strokeColor : '#24B0FF'}
                         strokeWidth={Math.max(2, layer.strokeWidth * 1.5)}
                         strokeLinecap="round"
                       />
@@ -925,31 +964,46 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
                     </svg>
                   )}
 
-                  {(layer.kind === 'text' || layer.kind === 'rectangle' || layer.kind === 'frame') && (
-                    <span
-                      style={{
-                        fontFamily: layer.fontFamily,
-                        fontSize: `${layer.fontSize}px`,
-                        fontWeight:
-                          layer.fontWeight === 'Bold'
-                            ? 700
-                            : layer.fontWeight === 'SemiBold'
-                            ? 600
-                            : 400,
-                        textAlign: layer.textAlign,
-                        textTransform: layer.textTransform,
-                        color:
-                          layer.kind === 'text'
-                            ? layer.fillColor
-                            : layer.kind === 'frame'
-                            ? '#9CA3AF'
-                            : '#0F172A',
-                      }}
-                      className="px-2 w-full truncate pointer-events-none select-none"
-                    >
-                      {layer.text}
-                    </span>
-                  )}
+                  {(layer.kind === 'text' || layer.kind === 'rectangle' || layer.kind === 'frame') &&
+                    (editingLayerId === layer.id ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        value={layer.text}
+                        onChange={(e) => onUpdateLayer(layer.id, { text: e.target.value })}
+                        onBlur={() => setEditingLayerId(null)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === 'Escape') setEditingLayerId(null);
+                        }}
+                        className="w-full px-2 bg-[#121419]/90 text-white text-center text-[11px] border border-[#24B0FF] rounded-[2px] focus:outline-none"
+                      />
+                    ) : (
+                      <span
+                        style={{
+                          fontFamily: layer.fontFamily,
+                          fontSize: `${layer.fontSize}px`,
+                          lineHeight: `${layer.lineHeight}px`,
+                          letterSpacing: `${layer.letterSpacing * 0.3}px`,
+                          fontWeight:
+                            layer.fontWeight === 'Bold'
+                              ? 700
+                              : layer.fontWeight === 'SemiBold'
+                              ? 600
+                              : 400,
+                          textAlign: layer.textAlign,
+                          textTransform: layer.textTransform,
+                          color:
+                            layer.kind === 'text'
+                              ? layer.fillColor
+                              : layer.kind === 'frame'
+                              ? '#9CA3AF'
+                              : '#0F172A',
+                        }}
+                        className="px-2 w-full truncate pointer-events-none select-none"
+                      >
+                        {layer.text}
+                      </span>
+                    ))}
 
                   {/* Resize Handles on Selected Layer */}
                   {isSelected && !layer.locked && (

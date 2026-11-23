@@ -125,6 +125,7 @@ export const DEFAULT_ATTRIBUTES: AttributesState = {
   strokeBlend: 'Normal',
   strokeAlign: 'Outside',
   strokeWidth: 2,
+  strokeVisible: true,
   tintColor: '#FF24F6',
   tintVisible: true,
   shadowColor: '#F59E0B',
@@ -325,6 +326,74 @@ export const PRIMITIVE_MENU_ITEMS = [
   'Spring',
   'Torus',
 ] as const;
+
+export const LIGHT_MENU_ITEMS = [
+  'Directional Light',
+  'Point Light',
+  'Rim Light',
+] as const;
+
+export const DEFAULT_CLUSTER_LOGIC_NODES: LogicNode[] = [
+  {
+    id: 'cnode-telemetry',
+    title: 'On Telemetry Frame',
+    nodeType: 'event',
+    x: 42,
+    y: 44,
+    width: 184,
+    enabled: true,
+    repeatEnabled: true,
+    pins: [
+      { id: 'c-out-speed', label: 'Speed Bus', kind: 'data', direction: 'out', color: '#45B87A' },
+      { id: 'c-out-pwr', label: 'Power kW', kind: 'data', direction: 'out', color: '#45B87A' },
+    ],
+  },
+  {
+    id: 'cnode-clamp',
+    title: 'Clamp Gauge Sweep',
+    nodeType: 'math',
+    x: 310,
+    y: 52,
+    width: 184,
+    enabled: true,
+    repeatEnabled: false,
+    pins: [
+      { id: 'c-in-1', label: 'Input 1', kind: 'data', direction: 'in', color: '#45B87A' },
+      { id: 'c-out-angle', label: 'Needle Angle', kind: 'data', direction: 'out', color: '#45B87A' },
+    ],
+  },
+  {
+    id: 'cnode-gauge-out',
+    title: 'Gauge Right Needle',
+    nodeType: 'variable',
+    x: 564,
+    y: 62,
+    width: 176,
+    value: 28,
+    enabled: true,
+    repeatEnabled: false,
+    pins: [{ id: 'c-in-val', label: 'Value', kind: 'data', direction: 'in', color: '#45B87A' }],
+  },
+];
+
+export const DEFAULT_CLUSTER_LOGIC_WIRES: LogicWire[] = [
+  {
+    id: 'cwire-1',
+    fromNodeId: 'cnode-telemetry',
+    fromPinId: 'c-out-pwr',
+    toNodeId: 'cnode-clamp',
+    toPinId: 'c-in-1',
+    color: '#45B87A',
+  },
+  {
+    id: 'cwire-2',
+    fromNodeId: 'cnode-clamp',
+    fromPinId: 'c-out-angle',
+    toNodeId: 'cnode-gauge-out',
+    toPinId: 'c-in-val',
+    color: '#45B87A',
+  },
+];
 
 export const CONTEXT_MENU_ITEMS = [
   { label: 'Light', hasSubmenu: true },
