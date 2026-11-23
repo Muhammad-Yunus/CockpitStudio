@@ -20,8 +20,10 @@ import type {
   AttributesState,
   BuiltInWidgetOverride,
   CanvasDrawTool,
+  EasingConfig,
   HmiLayer,
   TelemetrySnapshot,
+  TransitionTrack,
 } from '../types/studio';
 
 interface ClusterHmiCanvasProps {
@@ -43,6 +45,8 @@ interface ClusterHmiCanvasProps {
   onChangeDrawTool: (tool: CanvasDrawTool) => void;
   isSimulating: boolean;
   playheadMs: number;
+  tracks: TransitionTrack[];
+  easing: EasingConfig;
 }
 
 function detectSoftwareWebGL(): boolean {
@@ -76,6 +80,8 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
   onChangeDrawTool,
   isSimulating,
   playheadMs,
+  tracks,
+  easing,
 }) => {
   const carMountRef = useRef<HTMLDivElement>(null);
   const artboardRef = useRef<HTMLDivElement>(null);
@@ -84,6 +90,7 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
   const [editingLayerId, setEditingLayerId] = useState<string | null>(null);
   const simRef = useRef(isSimulating);
   const speedRef = useRef(telemetry.speedKmh);
+  const startSimLoopRef = useRef<() => void>(() => {});
 
   // Interactive drag / resize / draw state
   const [dragState, setDragState] = useState<
@@ -126,6 +133,9 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
 
   useEffect(() => {
     simRef.current = isSimulating;
+    if (isSimulating) {
+      startSimLoopRef.current();
+    }
   }, [isSimulating]);
 
   useEffect(() => {
@@ -335,12 +345,13 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
         else frameId = requestAnimationFrame(tick);
       }
     };
+    startSimLoopRef.current = tick;
 
     if (!isSoftwareGl) {
       renderer.compile(scene, camera);
     }
     renderStatic();
-    if (isSimulating) {
+    if (simRef.current) {
       tick();
     }
 
@@ -358,6 +369,7 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
 
     return () => {
       disposed = true;
+      startSimLoopRef.current = () => {};
       resizeObserver.disconnect();
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
@@ -376,7 +388,7 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
       shadowMat.dispose();
       renderer.dispose();
     };
-  }, [isSimulating]);
+  }, []);
 
   const snapVal = (v: number) => (snapEnabled ? Math.round(v / 8) * 8 : Math.round(v));
 
@@ -505,7 +517,38 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
       : '#2DD4BF');
 
   const selectedLayer = hmiLayers.find((l) => l.id === selectedNodeId);
-  const simSlideOffset = isSimulating ? Math.sin((playheadMs / 2500) * Math.PI * 2) * 8 : 0;
+
+  // Evaluate real Transition Editor tracks & easing curve at playheadMs
+  const applyEaseCurve = (u: number): number => {
+    const t = Math.min(1, Math.max(0, u));
+    if (easing.curveType === 'Spring') {
+      const dampingRatio = Math.max(0.15, easing.damping / Math.max(1, 2 * Math.sqrt(Math.max(1, easing.stiffness) * Math.max(0.5, easing.mass))));
+      const freq = Math.sqrt(Math.max(1, easing.stiffness) / Math.max(0.5, easing.mass)) * 0.6;
+      return 1 - Math.exp(-dampingRatio * 6 * t) * Math.cos(freq * t);
+    }
+    const power = easing.curveType === 'Quadratic' ? 2 : 3;
+    if (easing.easeMode === 'Ease in') return Math.pow(t, power);
+    if (easing.easeMode === 'Ease out') return 1 - Math.pow(1 - t, power);
+    return t < 0.5
+      ? Math.pow(2, power - 1) * Math.pow(t, power)
+      : 1 - Math.pow(-2 * t + 2, power) / 2;
+  };
+
+  const evalTrackOffset = (groupName: string, labelName: string, amplitude: number): number => {
+    const tr = tracks.find(
+      (item) => item.group === groupName && item.label.toLowerCase() === labelName.toLowerCase()
+    );
+    if (!tr || tr.endMs <= tr.startMs) return 0;
+    const effectivePlayhead = Math.max(0, playheadMs - easing.delayMs);
+    if (effectivePlayhead <= tr.startMs) return 0;
+    const progress = Math.min(1, (effectivePlayhead - tr.startMs) / (tr.endMs - tr.startMs));
+    return Math.sin(applyEaseCurve(progress) * Math.PI) * amplitude;
+  };
+
+  const timelineActive = isSimulating || playheadMs !== 500;
+  const simSlideX = timelineActive ? evalTrackOffset('Position', 'x', 14) : 0;
+  const simSlideY = timelineActive ? evalTrackOffset('Position', 'y', 8) : 0;
+  const simRotDeg = timelineActive ? evalTrackOffset('Rotation', 'x', 6) : 0;
 
   return (
     <div
@@ -889,13 +932,13 @@ export const ClusterHmiCanvas: React.FC<ClusterHmiCanvasProps> = ({
                     });
                   }}
                   style={{
-                    left: `${layer.x + (isSelected ? simSlideOffset : 0)}px`,
-                    top: `${layer.y}px`,
+                    left: `${layer.x + (isSelected ? simSlideX : 0)}px`,
+                    top: `${layer.y + (isSelected ? simSlideY : 0)}px`,
                     width: `${layer.w}px`,
                     height: `${layer.h}px`,
                     zIndex: 20 + Math.min(20, Math.round(layer.zOrder / 100)),
                     opacity: layer.opacity / 100,
-                    transform: `rotate(${layer.rotation}deg)`,
+                    transform: `rotate(${layer.rotation + (isSelected ? simRotDeg : 0)}deg)`,
                     borderRadius:
                       layer.kind === 'vector' || layer.kind === 'pen'
                         ? undefined

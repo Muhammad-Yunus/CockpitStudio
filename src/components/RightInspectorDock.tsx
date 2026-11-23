@@ -37,6 +37,7 @@ interface RightInspectorDockProps {
   onDuplicateSelected: () => void;
   onDeleteSelected: () => void;
   onInsertAssetLayer: (kind: HmiLayer['kind'], label: string) => void;
+  onImportAssetFile: (file: File) => void;
   logs: ConsoleLogEntry[];
   isEditingLayer: boolean;
 }
@@ -80,6 +81,7 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
   onDuplicateSelected,
   onDeleteSelected,
   onInsertAssetLayer,
+  onImportAssetFile,
   logs,
   isEditingLayer,
 }) => {
@@ -88,6 +90,9 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
   const [selectedFolder, setSelectedFolder] = useState<string>('Label');
   const [assetSearchOpen, setAssetSearchOpen] = useState(false);
   const [assetSearchQuery, setAssetSearchQuery] = useState('');
+  const [importedFiles, setImportedFiles] = useState<
+    Array<{ name: string; kind: HmiLayer['kind']; label: string }>
+  >([]);
   const [topMenuOpen, setTopMenuOpen] = useState(false);
   const [bottomMenuOpen, setBottomMenuOpen] = useState(false);
   const [textMenuOpen, setTextMenuOpen] = useState(false);
@@ -96,6 +101,7 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
   const topMenuRef = useRef<HTMLDivElement>(null);
   const bottomMenuRef = useRef<HTMLDivElement>(null);
   const textMenuRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -118,7 +124,11 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
   }, [topMenuOpen, bottomMenuOpen, textMenuOpen]);
 
   const codeLines = codeDocument.split('\n');
-  const currentAssets = (ASSET_FOLDER_FILES[selectedFolder] || ASSET_FOLDER_FILES.Label).filter(
+  const baseAssets =
+    selectedFolder === 'Local Disc' && importedFiles.length > 0
+      ? [...importedFiles, ...ASSET_FOLDER_FILES['Local Disc']]
+      : ASSET_FOLDER_FILES[selectedFolder] || ASSET_FOLDER_FILES.Label;
+  const currentAssets = baseAssets.filter(
     (item) =>
       !assetSearchQuery || item.name.toLowerCase().includes(assetSearchQuery.toLowerCase())
   );
@@ -1247,6 +1257,28 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
             </div>
 
             <div className="flex-1 p-2.5 flex flex-wrap content-start gap-3 bg-[#14161B] overflow-y-auto studio-scroll">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".html,.htm,.svg,.txt,.json,.png,.jpg,.jpeg"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const kind: HmiLayer['kind'] = file.name.endsWith('.svg')
+                    ? 'vector'
+                    : file.name.endsWith('.txt')
+                    ? 'text'
+                    : 'rectangle';
+                  setImportedFiles((prev) => [
+                    { name: file.name, kind, label: file.name.replace(/\.[^/.]+$/, '') },
+                    ...prev.filter((p) => p.name !== file.name),
+                  ]);
+                  setSelectedFolder('Local Disc');
+                  onImportAssetFile(file);
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
               {selectedFolder === 'Label' && !assetSearchQuery && (
                 <>
                   <button
@@ -1262,13 +1294,15 @@ export const RightInspectorDock: React.FC<RightInspectorDockProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setSelectedFolder('Program Files')}
+                    onClick={() => fileInputRef.current?.click()}
                     className="flex flex-col items-center gap-1 text-center cursor-pointer group"
-                    title="Open Program Files assets"
+                    title="Import local asset file (.html, .svg, .txt, .json, .png)"
                   >
-                    <Folder className="w-7 h-7 text-[#9CA3AF] group-hover:text-[#24B0FF] stroke-[1.3]" />
+                    <div className="w-7 h-7 rounded-[3px] border border-dashed border-[#4B5563] group-hover:border-[#24B0FF] flex items-center justify-center">
+                      <Plus className="w-4 h-4 text-[#9CA3AF] group-hover:text-[#24B0FF]" />
+                    </div>
                     <span className="text-[10px] text-[#9CA3AF] group-hover:text-white whitespace-nowrap">
-                      Local Disc
+                      Import File
                     </span>
                   </button>
                 </>

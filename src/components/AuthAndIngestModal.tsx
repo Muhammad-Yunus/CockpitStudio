@@ -60,7 +60,8 @@ interface AuthAndIngestModalProps {
   activeProjectId: string | null;
   activeProjectName: string;
   onSelectProject: (projectId: string) => void;
-  onSaveNewProject: (name: string) => Promise<void>;
+  onDeleteProject: (projectId: string) => void;
+  onSaveNewProject: (name: string) => Promise<{ ok: boolean; error?: string }>;
   onRefreshTelemetry: () => void;
 }
 
@@ -73,6 +74,7 @@ export const AuthAndIngestModal: React.FC<AuthAndIngestModalProps> = ({
   activeProjectId,
   activeProjectName,
   onSelectProject,
+  onDeleteProject,
   onSaveNewProject,
   onRefreshTelemetry,
 }) => {
@@ -86,6 +88,8 @@ export const AuthAndIngestModal: React.FC<AuthAndIngestModalProps> = ({
 
   const [projects, setProjects] = useState<SavedProjectMeta[]>([]);
   const [newProjectTitle, setNewProjectTitle] = useState(activeProjectName);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [panelError, setPanelError] = useState<string | null>(null);
 
   const [apiKeys, setApiKeys] = useState<ApiKeyMeta[]>([]);
   const [newKeyName, setNewKeyName] = useState('CAN-Bus Gateway');
@@ -99,6 +103,14 @@ export const AuthAndIngestModal: React.FC<AuthAndIngestModalProps> = ({
   useEffect(() => {
     setTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    if (isOpen) {
+      setNewProjectTitle(activeProjectName);
+      setPanelError(null);
+      setConfirmDeleteId(null);
+    }
+  }, [isOpen, activeProjectName]);
 
   const loadProjectsAndKeys = useCallback(async () => {
     if (!user) return;
@@ -151,7 +163,7 @@ export const AuthAndIngestModal: React.FC<AuthAndIngestModalProps> = ({
   if (!isOpen) return null;
 
   const handleCopy = (id: string, value: string) => {
-    navigator.clipboard.writeText(value);
+    navigator.clipboard?.writeText(value).catch(() => {});
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 1800);
   };
@@ -193,27 +205,62 @@ export const AuthAndIngestModal: React.FC<AuthAndIngestModalProps> = ({
 
   const handleCreateApiKey = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newKeyName.trim()) return;
-    const res = await fetch('/api/auth/keys', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: newKeyName.trim(),
-        scopes: ['ingest:write', 'telemetry:read', 'signals:write'],
-      }),
-    });
-    const data = await res.json();
-    if (res.ok) {
-      setRevealedKey(data.plainTextKey);
-      setNewKeyName('');
-      await loadProjectsAndKeys();
+    setPanelError(null);
+    if (!newKeyName.trim()) {
+      setPanelError('API key label must be at least 2 characters.');
+      return;
+    }
+    try {
+      const res = await fetch('/api/auth/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newKeyName.trim(),
+          scopes: ['ingest:write', 'telemetry:read', 'signals:write'],
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setRevealedKey(data.plainTextKey);
+        setNewKeyName('');
+        await loadProjectsAndKeys();
+      } else {
+        setPanelError(data.error || 'Failed to create API key');
+      }
+    } catch {
+      setPanelError('Network error while creating API key');
     }
   };
 
   const handleRevokeKey = async (id: string) => {
-    const res = await fetch(`/api/auth/keys/${id}`, { method: 'DELETE' });
-    if (res.ok) {
-      await loadProjectsAndKeys();
+    setPanelError(null);
+    try {
+      const res = await fetch(`/api/auth/keys/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        await loadProjectsAndKeys();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setPanelError(data.error || 'Failed to revoke API key');
+      }
+    } catch {
+      setPanelError('Network error while revoking API key');
+    }
+  };
+
+  const handleDeleteProjectRow = async (id: string) => {
+    setPanelError(null);
+    try {
+      const res = await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setConfirmDeleteId(null);
+        onDeleteProject(id);
+        await loadProjectsAndKeys();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setPanelError(data.error || 'Failed to delete project');
+      }
+    } catch {
+      setPanelError('Network error while deleting project');
     }
   };
 
@@ -282,6 +329,18 @@ export const AuthAndIngestModal: React.FC<AuthAndIngestModalProps> = ({
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto studio-scroll p-5 space-y-5 text-[12px]">
+          {panelError && tab !== 'auth' && (
+            <div className="p-2.5 bg-[#EF4444]/10 border border-[#EF4444]/40 text-[#FCA5A5] text-[11px] rounded-[3px] flex items-center justify-between">
+              <span>{panelError}</span>
+              <button
+                type="button"
+                onClick={() => setPanelError(null)}
+                className="text-[#FCA5A5] hover:text-white cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
           {tab === 'auth' && (
             <div className="max-w-[420px] mx-auto space-y-4">
               {user ? (
@@ -424,8 +483,13 @@ export const AuthAndIngestModal: React.FC<AuthAndIngestModalProps> = ({
                     <button
                       type="button"
                       onClick={async () => {
-                        await onSaveNewProject(newProjectTitle || 'EV Cockpit HMI v1');
-                        await loadProjectsAndKeys();
+                        setPanelError(null);
+                        const result = await onSaveNewProject(newProjectTitle.trim() || 'EV Cockpit HMI');
+                        if (!result.ok) {
+                          setPanelError(result.error || 'Failed to save project');
+                        } else {
+                          await loadProjectsAndKeys();
+                        }
                       }}
                       className="px-3 py-1.5 bg-[#10B981] hover:bg-[#0EA572] text-[#052E16] font-semibold rounded-[3px] flex items-center gap-1.5 cursor-pointer"
                     >
@@ -478,6 +542,33 @@ export const AuthAndIngestModal: React.FC<AuthAndIngestModalProps> = ({
                             >
                               {activeProjectId === proj.id ? 'Active' : 'Load'}
                             </button>
+                            {confirmDeleteId === proj.id ? (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteProjectRow(proj.id)}
+                                  className="px-2 py-1 bg-[#EF4444] text-white rounded-[2px] text-[10.5px] font-medium cursor-pointer"
+                                >
+                                  Confirm
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteId(null)}
+                                  className="px-1.5 py-1 bg-[#222630] text-[#9CA3AF] rounded-[2px] text-[10.5px] cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteId(proj.id)}
+                                className="p-1 text-[#6B7280] hover:text-[#EF4444] cursor-pointer"
+                                title="Delete Project"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))

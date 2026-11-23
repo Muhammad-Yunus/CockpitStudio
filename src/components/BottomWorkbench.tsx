@@ -53,6 +53,7 @@ interface BottomWorkbenchProps {
   onTriggerLogicStep: () => void;
   tracks: TransitionTrack[];
   onUpdateTrack: (trackId: string, patch: Partial<TransitionTrack>) => void;
+  onDeleteTrack: (trackId: string) => void;
   onAddKeyframeAtPlayhead: () => void;
   playheadMs: number;
   onChangePlayheadMs: (ms: number) => void;
@@ -60,6 +61,7 @@ interface BottomWorkbenchProps {
   onUpdateEasing: (patch: Partial<EasingConfig>) => void;
   currentSpeed: number;
   onUseAssetDatabaseItem: (assetName: string) => void;
+  onImportAssetFile: (file: File) => void;
 }
 
 export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
@@ -83,6 +85,7 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
   onTriggerLogicStep,
   tracks,
   onUpdateTrack,
+  onDeleteTrack,
   onAddKeyframeAtPlayhead,
   playheadMs,
   onChangePlayheadMs,
@@ -90,6 +93,7 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
   onUpdateEasing,
   currentSpeed,
   onUseAssetDatabaseItem,
+  onImportAssetFile,
 }) => {
   const [openSubTabs, setOpenSubTabs] = useState<Array<'Cluster' | 'Infotainment'>>([
     'Cluster',
@@ -124,6 +128,10 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const headerMenuRef = useRef<HTMLDivElement>(null);
+  const assetUploadRef = useRef<HTMLInputElement>(null);
+  const [importedDbAssets, setImportedDbAssets] = useState<
+    Array<{ name: string; kind: string; size: string }>
+  >([]);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -193,8 +201,9 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
     }
   };
 
-  const rulerTicks = [0, 500, 1000, 1500, 2000, 2500];
-  const maxMs = Math.round(2500 / timelineZoom);
+  const timelineSpanMs = Math.max(2500, ...tracks.map((t) => t.endMs));
+  const maxMs = Math.round(timelineSpanMs / timelineZoom);
+  const rulerTicks = [0, 0.2, 0.4, 0.6, 0.8, 1].map((r) => Math.round(r * maxMs));
 
   const curvePath =
     easing.curveType === 'Spring'
@@ -930,18 +939,32 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
                       tracks
                         .filter((t) => t.group === 'Position')
                         .map((t) => (
-                          <button
+                          <div
                             key={t.id}
-                            type="button"
-                            onClick={() =>
-                              onUpdateEasing({
-                                targetLabel: `BUTTON > POSITION > ${t.label.toUpperCase()}`,
-                              })
-                            }
-                            className="w-full pl-11 h-[20px] flex items-center text-[#9CA3AF] hover:bg-[#1E2129] hover:text-white cursor-pointer"
+                            className="group pl-11 pr-1.5 h-[20px] flex items-center justify-between text-[#9CA3AF] hover:bg-[#1E2129] hover:text-white"
                           >
-                            {t.label}
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onUpdateEasing({
+                                  targetLabel: `BUTTON > POSITION > ${t.label.toUpperCase()}`,
+                                })
+                              }
+                              className="flex-1 text-left cursor-pointer truncate"
+                            >
+                              {t.label}
+                            </button>
+                            {tracks.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteTrack(t.id)}
+                                className="opacity-0 group-hover:opacity-100 text-[#6B7280] hover:text-[#EF4444] cursor-pointer"
+                                title={`Remove ${t.label} track`}
+                              >
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            )}
+                          </div>
                         ))}
                     <button
                       type="button"
@@ -961,18 +984,32 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
                       tracks
                         .filter((t) => t.group === 'Rotation')
                         .map((t) => (
-                          <button
+                          <div
                             key={t.id}
-                            type="button"
-                            onClick={() =>
-                              onUpdateEasing({
-                                targetLabel: `BUTTON > ROTATION > ${t.label.toUpperCase()}`,
-                              })
-                            }
-                            className="w-full pl-11 h-[20px] flex items-center text-[#9CA3AF] hover:bg-[#1E2129] hover:text-white cursor-pointer"
+                            className="group pl-11 pr-1.5 h-[20px] flex items-center justify-between text-[#9CA3AF] hover:bg-[#1E2129] hover:text-white"
                           >
-                            {t.label}
-                          </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onUpdateEasing({
+                                  targetLabel: `BUTTON > ROTATION > ${t.label.toUpperCase()}`,
+                                })
+                              }
+                              className="flex-1 text-left cursor-pointer truncate"
+                            >
+                              {t.label}
+                            </button>
+                            {tracks.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => onDeleteTrack(t.id)}
+                                className="opacity-0 group-hover:opacity-100 text-[#6B7280] hover:text-[#EF4444] cursor-pointer"
+                                title={`Remove ${t.label} track`}
+                              >
+                                <X className="w-2.5 h-2.5" />
+                              </button>
+                            )}
+                          </div>
                         ))}
                   </>
                 )}
@@ -1003,7 +1040,7 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
               >
                 <div className="h-[20px] px-2 border-b border-[#232730] flex items-center justify-between text-[9px] font-mono-code text-[#6B7280]">
                   {rulerTicks.map((t) => (
-                    <span key={t}>{Math.round(t / timelineZoom)}</span>
+                    <span key={t}>{t}</span>
                   ))}
                 </div>
 
@@ -1225,13 +1262,44 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
 
       {/* ASSET DATABASE MODE */}
       {mode === 'Asset Database' && (
-        <div className="flex-1 p-3 overflow-y-auto studio-scroll">
+        <div className="flex-1 p-3 overflow-y-auto studio-scroll space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-[10.5px] text-[#8E95A2]">
+              Built-in HMI Templates & Imported Workspace Assets
+            </span>
+            <input
+              ref={assetUploadRef}
+              type="file"
+              accept=".html,.htm,.svg,.txt,.json,.png,.jpg,.jpeg"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                const kb = Math.max(1, Math.round(file.size / 1024));
+                setImportedDbAssets((prev) => [
+                  { name: file.name, kind: file.type || 'Local Asset', size: `${kb} KB` },
+                  ...prev.filter((a) => a.name !== file.name),
+                ]);
+                onImportAssetFile(file);
+                e.target.value = '';
+              }}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => assetUploadRef.current?.click()}
+              className="px-2.5 py-1 bg-[#1E2530] hover:bg-[#273140] border border-[#2C3442] rounded-[2px] text-[10.5px] text-[#24B0FF] flex items-center gap-1.5 cursor-pointer"
+            >
+              <Plus className="w-3 h-3" />
+              <span>Import Local Asset</span>
+            </button>
+          </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             {[
-              { name: 'EV_Coupe_Hero.glb', kind: '3D Mesh', size: '4.2 MB' },
-              { name: 'Road_Beam_Glow.glsl', kind: 'Shader', size: '18 KB' },
-              { name: 'Gauge_Needle_Mask.png', kind: 'Texture', size: '240 KB' },
-              { name: 'SairaSemiCondensed.ttf', kind: 'Font', size: '112 KB' },
+              ...importedDbAssets,
+              { name: 'EV_Coupe_Hero.glb', kind: '3D Mesh Preset', size: 'Procedural' },
+              { name: 'Road_Beam_Glow.glsl', kind: 'Shadow Shader', size: 'Built-in' },
+              { name: 'Gauge_Needle_Mask.png', kind: 'Bezier Path', size: 'Built-in' },
+              { name: 'SairaSemiCondensed.ttf', kind: 'Cluster Font', size: 'Built-in' },
             ].map((asset) => (
               <button
                 key={asset.name}
@@ -1245,7 +1313,7 @@ export const BottomWorkbench: React.FC<BottomWorkbenchProps> = ({
                   <div className="text-[11px] font-medium text-[#E5E7EB] truncate">
                     {asset.name}
                   </div>
-                  <div className="text-[10px] text-[#6B7280] font-mono-code">
+                  <div className="text-[10px] text-[#6B7280] font-mono-code truncate">
                     {asset.kind} · {asset.size}
                   </div>
                 </div>

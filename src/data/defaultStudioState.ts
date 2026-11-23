@@ -92,31 +92,31 @@ export const DEFAULT_PROJECT_TREE: ProjectNode[] = [
 
 export const DEFAULT_ATTRIBUTES: AttributesState = {
   selectedNodeId: 'minutes-label',
-  objectName: 'Rectangle',
-  objectType: 'Rectangle',
+  objectName: 'Speedometer',
+  objectType: 'Text',
   opacity: 100,
   zOrder: 1000,
-  x: 45678,
-  y: 34,
-  z: 134,
-  w: 47,
-  h: 56,
-  rotX: 47,
-  rotY: 56,
-  rotZ: 45678,
-  scaleX: 23,
-  scaleY: 67,
-  scaleZ: 23,
-  skewX: 45,
-  skewY: 87,
+  x: 0,
+  y: 0,
+  z: 0,
+  w: 120,
+  h: 48,
+  rotX: 0,
+  rotY: 0,
+  rotZ: 0,
+  scaleX: 100,
+  scaleY: 100,
+  scaleZ: 100,
+  skewX: 0,
+  skewY: 0,
   anchorV: 'Bottom',
   anchorH: 'Right',
-  angle: 23,
-  cornerRadius: 67,
-  pivotX: 100,
-  pivotY: 100,
-  pivotZ: 100,
-  fillColor: '#C2CDE4',
+  angle: 0,
+  cornerRadius: 8,
+  pivotX: 50,
+  pivotY: 50,
+  pivotZ: 50,
+  fillColor: '#E5EAF2',
   fillOpacity: 100,
   fillBlend: 'Normal',
   fillVisible: true,
@@ -127,14 +127,14 @@ export const DEFAULT_ATTRIBUTES: AttributesState = {
   strokeWidth: 2,
   strokeVisible: true,
   tintColor: '#FF24F6',
-  tintVisible: true,
+  tintVisible: false,
   shadowColor: '#F59E0B',
-  shadowVisible: true,
-  backgroundBlur: 80,
-  blurVisible: true,
+  shadowVisible: false,
+  backgroundBlur: 0,
+  blurVisible: false,
   fontFamily: 'Saira Semi Condensed',
   fontWeight: 'Regular',
-  fontSize: 11,
+  fontSize: 14,
   lineHeight: 20,
   letterSpacing: 0,
   paragraphSpacing: 0,
@@ -279,18 +279,26 @@ export const DEFAULT_CODE_DOCUMENT = `<!doctype html>
 </body>
 </html>`;
 
+const nowLabel = () => {
+  const d = new Date();
+  const pad = (n: number, len = 2) => String(n).padStart(len, '0');
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+};
+
 export const DEFAULT_CONSOLE_LOGS: ConsoleLogEntry[] = [
   {
-    id: 'log-1',
-    timestamp: '2026.11.22 19:10:51.349',
+    id: 'log-boot',
+    timestamp: nowLabel(),
     level: 'info',
-    message: 'Module::LoadProject() - Logic: 0.000819875s',
+    message: 'CockpitStudio::Init() - HMI Canvas, 3D Viewport & Logic Graph ready.',
   },
   {
-    id: 'log-2',
-    timestamp: '2026.11.22 19:10:51.350',
+    id: 'log-ingest-ready',
+    timestamp: nowLabel(),
     level: 'info',
-    message: 'Runtime::BindTelemetryChannel() - Ready for HMI design & external API ingest.',
+    message: 'IngestAPI::AwaitExternal() - POST /api/v1/ingest/telemetry (Zod validated).',
   },
 ];
 

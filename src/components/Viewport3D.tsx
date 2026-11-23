@@ -387,12 +387,19 @@ export const Viewport3D: React.FC<Viewport3DProps> = ({
     };
   }, []);
 
-  // Sync Material Editor changes
+  // Sync Material Editor changes to active 3D mesh (or default hero surface)
   useEffect(() => {
-    if (redSurfaceMatRef.current) {
-      redSurfaceMatRef.current.color.set(attributes.materialColor);
-      redSurfaceMatRef.current.metalness = attributes.materialMetalness;
-      redSurfaceMatRef.current.roughness = attributes.materialRoughness;
+    const selected = selectedMeshRef.current as THREE.Mesh | null;
+    const targetMat =
+      selected && selected.material instanceof THREE.MeshStandardMaterial
+        ? selected.material
+        : redSurfaceMatRef.current;
+
+    if (targetMat) {
+      targetMat.color.set(attributes.materialColor);
+      targetMat.metalness = attributes.materialMetalness;
+      targetMat.roughness = attributes.materialRoughness;
+      targetMat.needsUpdate = true;
       requestRenderRef.current();
     }
   }, [attributes.materialColor, attributes.materialMetalness, attributes.materialRoughness]);

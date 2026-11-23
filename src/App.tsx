@@ -106,6 +106,8 @@ export default function App() {
   const [modalOpen, setModalOpen] = useState(false);
   const [modalInitialTab, setModalInitialTab] = useState<'auth' | 'projects' | 'ingest'>('auth');
 
+  const lastIngestKeyRef = React.useRef<string | null>(null);
+
   const appendLog = useCallback((level: ConsoleLogEntry['level'], message: string) => {
     setLogs((prev) => [
       { id: `log-${Date.now()}-${Math.random()}`, timestamp: formatTimestamp(), level, message },
@@ -132,6 +134,16 @@ export default function App() {
       const data = await res.json();
       if (data?.frame) {
         const f = data.frame;
+        const ingestKey = `${f.id ?? ''}:${f.ingestedAt ?? ''}`;
+        if (f.ingestedAt && lastIngestKeyRef.current !== ingestKey) {
+          lastIngestKeyRef.current = ingestKey;
+          appendLog(
+            'ingest',
+            `Ingest::Telemetry(${f.sourceSystem || 'EXTERNAL'}, ${f.vehicleId || 'BUS'}) -> speed=${
+              f.speedKmh ?? '—'
+            } km/h, power=${f.powerKw ?? '—'} kW`
+          );
+        }
         setTelemetry((prev) => ({
           ...prev,
           speedKmh: f.speedKmh ?? prev.speedKmh,
@@ -155,7 +167,7 @@ export default function App() {
     } catch {
       // ignore transient poll failure
     }
-  }, [user, activeProjectId]);
+  }, [user, activeProjectId, appendLog]);
 
   useEffect(() => {
     if (!user || !activeProjectId) return;
@@ -170,37 +182,113 @@ export default function App() {
   const setActiveLogicWires = logicSubTab === 'Infotainment' ? setLogicWires : setClusterLogicWires;
 
   const handleTriggerLogicStep = useCallback(() => {
-    if (logicSubTab === 'Cluster') {
-      setTelemetry((prev) => ({
-        ...prev,
-        powerKw: Math.max(0, prev.powerKw - 1),
-      }));
-      appendLog('info', 'Cluster::ClampGaugeSweep executed -> Gauge Right updated.');
+    const graphNodes = logicSubTab === 'Infotainment' ? logicNodes : clusterLogicNodes;
+    const graphWires = logicSubTab === 'Infotainment' ? logicWires : clusterLogicWires;
+
+    const disabledEvents = graphNodes.filter((n) => n.nodeType === 'event' && !n.enabled);
+    if (graphNodes.some((n) => n.nodeType === 'event') && disabledEvents.length === graphNodes.filter((n) => n.nodeType === 'event').length) {
+      appendLog('info', `Logic::${logicSubTab} skipped (all event trigger nodes disabled).`);
       return;
     }
 
-    const keyNode = logicNodes.find((n) => n.id === 'node-on-key');
-    if (keyNode && !keyNode.enabled) {
-      appendLog('info', 'Logic::OnKeyPressDown skipped (node disabled).');
+    const evalNodeOutput = (nodeId: string, visited = new Set<string>()): number => {
+      if (visited.has(nodeId)) return 0;
+      visited.add(nodeId);
+      const node = graphNodes.find((n) => n.id === nodeId);
+      if (!node || !node.enabled) return 0;
+
+      const incomingWires = graphWires.filter((w) => w.toNodeId === node.id);
+      if (node.nodeType === 'event') {
+        if (/power/i.test(node.title)) return telemetry.powerKw;
+        return telemetry.speedKmh;
+      }
+
+      if (node.nodeType === 'variable') {
+        if (incomingWires.length > 0 && node.id !== 'node-speed-in') {
+          return evalNodeOutput(incomingWires[0].fromNodeId, new Set(visited));
+        }
+        if (node.id === 'node-speed-in' || /^speed/i.test(node.title)) {
+          return telemetry.speedKmh;
+        }
+        if (/power|gauge/i.test(node.title)) {
+          return telemetry.powerKw;
+        }
+        return typeof node.value === 'number' ? node.value : Number(node.value) || 0;
+      }
+
+      // Math / Binary node evaluation using wired input pins
+      const inputPins = node.pins.filter((p) => p.direction === 'in');
+      const resolvedInputs = inputPins.map((pin) => {
+        const w = graphWires.find((wire) => wire.toNodeId === node.id && wire.toPinId === pin.id);
+        return w ? evalNodeOutput(w.fromNodeId, new Set(visited)) : 0;
+      });
+      const a = resolvedInputs[0] ?? 0;
+      const b = resolvedInputs[1] ?? 1;
+      const titleLower = node.title.toLowerCase();
+      if (titleLower.includes('substract') || titleLower.includes('subtract')) {
+        return Math.max(0, a - b);
+      }
+      if (titleLower.includes('add')) return a + b;
+      if (titleLower.includes('multiply')) return a * b;
+      if (titleLower.includes('divide')) return b !== 0 ? Math.round((a / b) * 100) / 100 : a;
+      if (titleLower.includes('compare') || titleLower.includes('binary')) return a > b ? 1 : 0;
+      if (titleLower.includes('clamp')) return Math.max(0, Math.min(240, a - 1));
+      return a;
+    };
+
+    // Identify terminal variable nodes that receive wire inputs
+    const sinkVariables = graphNodes.filter(
+      (n) =>
+        n.nodeType === 'variable' &&
+        n.enabled &&
+        graphWires.some((w) => w.toNodeId === n.id)
+    );
+
+    if (sinkVariables.length === 0) {
+      appendLog('info', `Logic::${logicSubTab} evaluated (0 wired target variables).`);
       return;
     }
-    const stepNode = logicNodes.find((n) => n.id === 'node-step-in');
-    const step = typeof stepNode?.value === 'number' ? stepNode.value : 1;
 
+    const updatedValues = new Map<string, number>();
+    let nextSpeed = telemetry.speedKmh;
+    let nextPower = telemetry.powerKw;
+    const nextSignals = { ...telemetry.signals };
+
+    sinkVariables.forEach((sink) => {
+      const val = Math.round(evalNodeOutput(sink.id));
+      updatedValues.set(sink.id, val);
+      nextSignals[sink.title] = val;
+      if (/speed/i.test(sink.title)) {
+        nextSpeed = Math.max(0, Math.min(450, val));
+      } else if (/power|gauge/i.test(sink.title)) {
+        nextPower = Math.max(0, Math.min(1500, val));
+      }
+    });
+
+    setActiveLogicNodes((prev) =>
+      prev.map((n) => (updatedValues.has(n.id) ? { ...n, value: updatedValues.get(n.id)! } : n))
+    );
     setTelemetry((prev) => ({
       ...prev,
-      speedKmh: Math.max(0, prev.speedKmh - step),
+      speedKmh: nextSpeed,
+      powerKw: nextPower,
+      signals: nextSignals,
     }));
-    appendLog('info', `Logic::Substract executed -> Speed value decremented by ${step} km/h.`);
-  }, [logicSubTab, logicNodes, appendLog]);
+
+    const summary = Array.from(updatedValues.entries())
+      .map(([id, val]) => `${graphNodes.find((n) => n.id === id)?.title || id}=${val}`)
+      .join(', ');
+    appendLog('info', `Logic::${logicSubTab} executed -> ${summary}`);
+  }, [logicSubTab, logicNodes, logicWires, clusterLogicNodes, clusterLogicWires, telemetry, setActiveLogicNodes, appendLog]);
 
   useEffect(() => {
     if (!isSimulating) return;
+    const spanMs = Math.max(2500, ...tracks.map((t) => t.endMs));
     const interval = window.setInterval(() => {
-      setPlayheadMs((prev) => (prev + 25) % 2500);
+      setPlayheadMs((prev) => (prev + 25) % spanMs);
     }, 50);
     return () => window.clearInterval(interval);
-  }, [isSimulating]);
+  }, [isSimulating, tracks]);
 
   const handleSelectViewportTab = (tab: ViewportTab) => {
     setOpenViewportTabs((prev) => (prev.includes(tab) ? prev : [...prev, tab]));
@@ -931,6 +1019,7 @@ export default function App() {
             ]
           : [
               { id: `${id}-in1`, label: 'Input 1', kind: 'data', direction: 'in', color: '#45B87A' },
+              { id: `${id}-in2`, label: 'Input 2', kind: 'data', direction: 'in', color: '#45B87A' },
               { id: `${id}-out`, label: 'Output', kind: 'data', direction: 'out', color: '#45B87A' },
             ],
     };
@@ -1057,41 +1146,96 @@ export default function App() {
     } else if (assetName === 'SairaSemiCondensed.ttf') {
       handleUpdateAttributes({ fontFamily: 'Saira Semi Condensed' });
       appendLog('info', `Asset::ApplyFont("${assetName}") -> Saira Semi Condensed.`);
+    } else {
+      handleCreateLayer(
+        'rectangle',
+        { x: 240, y: 105, w: 140, h: 48 },
+        assetName.replace(/\.[^/.]+$/, ''),
+        assetName
+      );
+      handleSelectViewportTab('Infotainment');
     }
   };
 
-  const handleSaveNewProject = async (name: string) => {
-    if (!user) return;
-    const res = await fetch('/api/projects', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        activeTab: activeViewportTab,
-        sceneGraph: {
-          sceneTree,
-          projectTree,
-          addedPrimitives,
-          addedLights,
-          hmiLayers,
-          widgetOverrides,
-        },
-        attributesState: attributes as unknown as Record<string, unknown>,
-        logicGraph: {
-          nodes: logicNodes,
-          wires: logicWires,
-          clusterNodes: clusterLogicNodes,
-          clusterWires: clusterLogicWires,
-        },
-        transitions: { tracks, playheadMs, easing },
-        codeDocument,
-      }),
-    });
-    const data = await res.json();
-    if (res.ok && data.project) {
-      setActiveProjectId(data.project.id);
-      setActiveProjectName(data.project.name);
-      appendLog('info', `PostgreSQL::CreateProject("${data.project.name}") -> ${data.project.id}`);
+  const handleImportAssetFile = (file: File) => {
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    if (['html', 'htm', 'svg', 'txt', 'json'].includes(ext)) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = typeof reader.result === 'string' ? reader.result : '';
+        if (ext === 'html' || ext === 'htm') {
+          setCodeDocument(text);
+          setRightBottomTab('Code Editor');
+        } else if (ext === 'txt') {
+          handleCreateLayer(
+            'text',
+            { x: 240, y: 105, w: 160, h: 36 },
+            file.name,
+            text.slice(0, 60) || file.name
+          );
+        } else {
+          setCodeDocument(text);
+          handleCreateLayer(
+            ext === 'svg' ? 'vector' : 'rectangle',
+            { x: 240, y: 105, w: 120, h: 64 },
+            file.name,
+            file.name
+          );
+        }
+        appendLog('info', `Asset::ImportFile("${file.name}", ${file.size} bytes)`);
+      };
+      reader.readAsText(file);
+    } else {
+      handleCreateLayer(
+        'rectangle',
+        { x: 240, y: 105, w: 140, h: 52 },
+        file.name,
+        file.name
+      );
+      appendLog('info', `Asset::ImportBinary("${file.name}", ${file.size} bytes)`);
+    }
+  };
+
+  const handleSaveNewProject = async (
+    name: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!user) return { ok: false, error: 'Authentication required' };
+    try {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          activeTab: activeViewportTab,
+          sceneGraph: {
+            sceneTree,
+            projectTree,
+            addedPrimitives,
+            addedLights,
+            hmiLayers,
+            widgetOverrides,
+          },
+          attributesState: attributes as unknown as Record<string, unknown>,
+          logicGraph: {
+            nodes: logicNodes,
+            wires: logicWires,
+            clusterNodes: clusterLogicNodes,
+            clusterWires: clusterLogicWires,
+          },
+          transitions: { tracks, playheadMs, easing },
+          codeDocument,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.project) {
+        setActiveProjectId(data.project.id);
+        setActiveProjectName(data.project.name);
+        appendLog('info', `PostgreSQL::CreateProject("${data.project.name}") -> ${data.project.id}`);
+        return { ok: true };
+      }
+      return { ok: false, error: data.error || 'Failed to save project' };
+    } catch {
+      return { ok: false, error: 'Network error while saving project' };
     }
   };
 
@@ -1284,6 +1428,8 @@ export default function App() {
                 onChangeDrawTool={setActiveDrawTool}
                 isSimulating={isSimulating}
                 playheadMs={playheadMs}
+                tracks={tracks}
+                easing={easing}
               />
             )}
 
@@ -1317,6 +1463,8 @@ export default function App() {
                   onChangeDrawTool={setActiveDrawTool}
                   isSimulating={isSimulating}
                   playheadMs={playheadMs}
+                  tracks={tracks}
+                  easing={easing}
                 />
                 <Viewport3D
                   addedPrimitives={addedPrimitives}
@@ -1374,6 +1522,10 @@ export default function App() {
                     prev.map((t) => (t.id === trackId ? { ...t, ...patch } : t))
                   )
                 }
+                onDeleteTrack={(trackId) => {
+                  setTracks((prev) => prev.filter((t) => t.id !== trackId));
+                  appendLog('info', `Timeline::DeleteTrack(${trackId})`);
+                }}
                 onAddKeyframeAtPlayhead={handleAddKeyframeAtPlayhead}
                 playheadMs={playheadMs}
                 onChangePlayheadMs={setPlayheadMs}
@@ -1381,6 +1533,7 @@ export default function App() {
                 onUpdateEasing={(patch) => setEasing((prev) => ({ ...prev, ...patch }))}
                 currentSpeed={telemetry.speedKmh}
                 onUseAssetDatabaseItem={handleUseAssetDatabaseItem}
+                onImportAssetFile={handleImportAssetFile}
               />
             </div>
           )}
@@ -1412,6 +1565,7 @@ export default function App() {
               );
               handleSelectViewportTab('Infotainment');
             }}
+            onImportAssetFile={handleImportAssetFile}
             logs={logs}
             isEditingLayer={isEditingCustomLayer}
           />
@@ -1423,10 +1577,24 @@ export default function App() {
         initialTab={modalInitialTab}
         onClose={() => setModalOpen(false)}
         user={user}
-        onUserChange={setUser}
+        onUserChange={(nextUser) => {
+          setUser(nextUser);
+          if (!nextUser) {
+            setActiveProjectId(null);
+            setActiveProjectName('EV Cockpit HMI');
+            lastIngestKeyRef.current = null;
+          }
+        }}
         activeProjectId={activeProjectId}
         activeProjectName={activeProjectName}
         onSelectProject={handleLoadProject}
+        onDeleteProject={(deletedId) => {
+          if (activeProjectId === deletedId) {
+            setActiveProjectId(null);
+            setActiveProjectName('EV Cockpit HMI');
+          }
+          appendLog('info', `PostgreSQL::DeleteProject(${deletedId})`);
+        }}
         onSaveNewProject={handleSaveNewProject}
         onRefreshTelemetry={fetchLatestTelemetry}
       />

@@ -164,6 +164,22 @@ ingestRouter.post(
 
     const parsed = telemetryBatchIngestSchema.safeParse(req.body);
     if (!parsed.success) {
+      const rawProjectId = typeof req.body?.projectId === 'string' ? req.body.projectId : null;
+      if (rawProjectId && /^[0-9a-f-]{36}$/i.test(rawProjectId)) {
+        const owns = await verifyProjectOwnership(rawProjectId, userId);
+        if (owns) {
+          await db.insert(cockpitIngestLogs).values({
+            projectId: rawProjectId,
+            apiKeyId: req.apiKey?.id ?? null,
+            sourceSystem:
+              typeof req.body?.sourceSystem === 'string' ? req.body.sourceSystem : 'unknown',
+            status: 'rejected',
+            recordCount: Array.isArray(req.body?.frames) ? req.body.frames.length : 1,
+            errorMessage: JSON.stringify(parsed.error.flatten().fieldErrors),
+          });
+        }
+      }
+
       res.status(400).json({
         error: 'Batch schema validation failed',
         details: parsed.error.flatten(),
@@ -244,6 +260,22 @@ ingestRouter.post(
 
     const parsed = signalIngestSchema.safeParse(req.body);
     if (!parsed.success) {
+      const rawProjectId = typeof req.body?.projectId === 'string' ? req.body.projectId : null;
+      if (rawProjectId && /^[0-9a-f-]{36}$/i.test(rawProjectId)) {
+        const owns = await verifyProjectOwnership(rawProjectId, userId);
+        if (owns) {
+          await db.insert(cockpitIngestLogs).values({
+            projectId: rawProjectId,
+            apiKeyId: req.apiKey?.id ?? null,
+            sourceSystem:
+              typeof req.body?.sourceSystem === 'string' ? req.body.sourceSystem : 'unknown',
+            status: 'rejected',
+            recordCount: 1,
+            errorMessage: JSON.stringify(parsed.error.flatten().fieldErrors),
+          });
+        }
+      }
+
       res.status(400).json({
         error: 'Signal schema validation failed',
         details: parsed.error.flatten().fieldErrors,
